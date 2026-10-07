@@ -34,6 +34,7 @@ let armed: string | undefined
 let busy: string | undefined
 let problem: string | undefined
 let sessionTask: { id: string; plan: string } | undefined
+let showOthers = false
 let isTurnRunning = false
 let isFresh = true
 let touched = new Set<string>()
@@ -82,7 +83,8 @@ async function refresh($: any) {
       const found = findTask(id)
       if (found && found.task.status === 'In Progress') {
         sessionTask = { id, plan: found.plan.plan_id }
-        if (!expanded.size) expanded.add(found.plan.plan_id)
+        expanded.add(found.plan.plan_id)
+        showOthers = false
       }
     }
   }
@@ -267,6 +269,8 @@ async function start($: any, planId: string, taskId: string) {
       sessionId = await $.session.id()
     }
     sessionTask = { id: task.task_id, plan: plan.plan_id }
+    expanded.add(plan.plan_id)
+    showOthers = false
     selected = undefined
     busy = undefined
     isFresh = false
@@ -457,8 +461,13 @@ export const register: Register = (on, options) => {
     const active = plans.filter(plan => plan.state === 'Active')
     const pickedRow = selected ? findTask(selected) : undefined
 
+    // A session with a task sees its own roadmap; the rest fold into one row.
+    const focus = sessionTask ? active.find(plan => plan.plan_id === sessionTask?.plan) : undefined
+    const others = focus ? active.length - 1 : 0
+    const shown = focus && !showOthers ? [focus] : active
+
     const rows: any[] = []
-    for (const plan of active) {
+    for (const plan of shown) {
       const isOpen = expanded.has(plan.plan_id)
       const isSame = sessionTask?.plan === plan.plan_id
       const meta = `${plan.counts.done}/${plan.counts.total} · ${plan.counts.ready} ready`
@@ -524,6 +533,20 @@ export const register: Register = (on, options) => {
         }
       }
       if (doneCount) rows.push(<Text key={`d-${plan.plan_id}`} dimColor>{`  ✓ ${doneCount} done`}</Text>)
+    }
+    if (others > 0) {
+      rows.push(
+        <Button
+          key="others"
+          plain
+          dimColor
+          label={showOthers ? '▴ only this roadmap' : `▸ ${others} other roadmap${others === 1 ? '' : 's'}`}
+          onPress={() => {
+            showOthers = !showOthers
+            $.ui.invalidate('ui.render')
+          }}
+        />,
+      )
     }
 
     let action: any = null
