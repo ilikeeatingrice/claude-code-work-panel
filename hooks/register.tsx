@@ -109,8 +109,64 @@ async function readLive($: any): Promise<Map<string, LiveEntry>> {
 
 async function beat($: any) {
   if (!isEnabled || !sessionId) return
-  const value: LiveEntry = { sessionId, task: sessionTask?.id ?? null, cwd: root, at: await $.clock.now() }
+  const value: LiveEntry = {
+    sessionId,
+    task: sessionTask?.id ?? null,
+    now: nowText ?? null,
+    nowAt,
+    cwd: root,
+    at: await $.clock.now(),
+  }
   await $.fs.write(`${liveDir}/${sessionId}.json`, JSON.stringify(value))
+}
+
+// After a reload the module starts blank: take this session's task back from
+// its own live file, which outlives the module.
+async function restoreFromLive($: any) {
+  try {
+    const path = `${liveDir}/${sessionId}.json`
+    if (!(await $.fs.exists(path))) return
+    const saved = JSON.parse(await $.fs.read(path)) as LiveEntry
+    if (!saved.task) return
+    const found = findTask(saved.task)
+    if (!found) return
+    sessionTask = { id: saved.task, plan: found.plan.plan_id }
+    expanded.add(found.plan.plan_id)
+    nowText = saved.now ?? undefined
+    nowAt = saved.nowAt ?? 0
+  } catch {
+    // no saved state
+  }
+}
+
+// When the panel does not know this session's task but the conversation has
+// history, ask the session's own model once (no tools, cached prefix).
+let askedModel = false
+async function askModelForTask($: any) {
+  if (sessionTask || isFresh || askedModel || !plans.length) return
+  askedModel = true
+  const example = plans.find(plan => plan.tasks.length)?.tasks[0]?.task_id ?? 'TASK-001.01'
+  try {
+    const reply = await $.model.fork({
+      prompt: `Which tracked task is this session working on right now (task ids look like ${example})? Reply with exactly one line: the task id, a space, a vertical bar, a space, then what you are doing now in under 8 words. If this session is not working on a tracked task, reply NONE.`,
+    })
+    if (!reply.isAnswered || !reply.text) return
+    const line = reply.text.trim().split('\n')[0] ?? ''
+    const match = line.match(/\b([A-Za-z][A-Za-z0-9]*-\d+(?:\.\d+)*)\b\s*\|?\s*(.*)$/)
+    if (!match) return
+    const id = match[1]!.toUpperCase()
+    const found = findTask(id)
+    if (!found || found.task.status === 'Done' || found.task.completed) return
+    sessionTask = { id, plan: found.plan.plan_id }
+    expanded.add(found.plan.plan_id)
+    showOthers = false
+    nowText = (match[2] ?? '').trim().slice(0, 80) || undefined
+    nowAt = await $.clock.now()
+    await beat($)
+    $.ui.invalidate('ui.render')
+  } catch {
+    // the question is a convenience; the panel works without it
+  }
 }
 
 function findTask(id: string): { plan: TreePlan; task: TreeTask } | undefined {
@@ -372,6 +428,7 @@ export const register: Register = (on, options) => {
     })
     await $.tool.register(FOCUS_SPEC)
     await refresh($)
+    await restoreFromLive($)
     await beat($)
     heartbeat?.cancel()
     heartbeat = $.clock.every(60_000, () => {
@@ -392,6 +449,7 @@ export const register: Register = (on, options) => {
     if (e.reason === 'clear') {
       sessionTask = undefined
       nowText = undefined
+      askedModel = false
       isFresh = true
     }
     return next(e)
@@ -414,6 +472,7 @@ export const register: Register = (on, options) => {
       return { text: 'Work panel hidden.' }
     }
     await refresh($)
+    void askModelForTask($)
     const opened = await openPane($, e.presentation?.columns)
     return { text: opened.isPlaced ? 'Work panel open.' : 'Work panel waits for a wider terminal.' }
   })
@@ -487,7 +546,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     isTurnRunning = false
-    if (isEnabled) void refresh($)
+    if (isEnabled) void refresh($).then(() => askModelForTask($))
     return done
   })
 

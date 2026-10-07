@@ -34,6 +34,8 @@ export type TreePlan = {
 export type LiveEntry = {
   sessionId: string
   task: string | null
+  now?: string | null
+  nowAt?: number
   cwd: string
   at: number
 }

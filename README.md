@@ -52,7 +52,7 @@ TASK-001.02 · Guest checkout without an account
 now: writing tests for the guest token · 2m ago
 ```
 
-The agent keeps it current through a small `focus` tool the plugin gives it: it calls it when it claims or switches a task, at each milestone, and when it finishes. If an agent never calls it, the panel still follows its claims: after a tool call that marks a task In Progress, the panel switches to that task.
+The agent keeps it current through a small `focus` tool the plugin gives it: it calls it when it claims or switches a task, at each milestone, and when it finishes. If an agent never calls it, the panel still follows its claims: after a tool call that marks a task In Progress, the panel switches to that task. After a plugin reload it reads the task back from the session's own live file, and when it still doesn't know (a session that claimed its task earlier), it asks the session's model once, with no tools, and checks the answer against the tracker.
 
 ### What the button does
 
