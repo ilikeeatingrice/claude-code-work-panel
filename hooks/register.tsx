@@ -34,6 +34,9 @@ let armed: string | undefined
 let busy: string | undefined
 let problem: string | undefined
 let sessionTask: { id: string; plan: string } | undefined
+// This session's task when the tracker does not list it (a task file that no
+// longer parses, say): kept and shown with a warning instead of forgotten.
+let missingTask: string | undefined
 let showOthers = false
 let nowText: string | undefined
 let nowAt = 0
@@ -72,6 +75,14 @@ async function refresh($: any) {
     loadError = String((err as Error)?.message ?? err)
   }
   live = await readLive($)
+  if (missingTask && !sessionTask) {
+    const found = findTask(missingTask)
+    if (found) {
+      sessionTask = { id: missingTask, plan: found.plan.plan_id }
+      expanded.add(found.plan.plan_id)
+      missingTask = undefined
+    }
+  }
   try {
     isFresh = (await $.session.messages()).length === 0
   } catch {
@@ -111,7 +122,7 @@ async function beat($: any) {
   if (!isEnabled || !sessionId) return
   const value: LiveEntry = {
     sessionId,
-    task: sessionTask?.id ?? null,
+    task: sessionTask?.id ?? missingTask ?? null,
     now: nowText ?? null,
     nowAt,
     cwd: root,
@@ -128,8 +139,13 @@ async function restoreFromLive($: any) {
     if (!(await $.fs.exists(path))) return
     const saved = JSON.parse(await $.fs.read(path)) as LiveEntry
     if (!saved.task) return
+    nowText = saved.now ?? undefined
+    nowAt = saved.nowAt ?? 0
     const found = findTask(saved.task)
-    if (!found) return
+    if (!found) {
+      missingTask = saved.task
+      return
+    }
     sessionTask = { id: saved.task, plan: found.plan.plan_id }
     expanded.add(found.plan.plan_id)
     nowText = saved.now ?? undefined
@@ -143,7 +159,7 @@ async function restoreFromLive($: any) {
 // history, ask the session's own model once (no tools, cached prefix).
 let askedModel = false
 async function askModelForTask($: any) {
-  if (sessionTask || isFresh || askedModel || !plans.length) return
+  if (sessionTask || missingTask || isFresh || askedModel || !plans.length) return
   askedModel = true
   const example = plans.find(plan => plan.tasks.length)?.tasks[0]?.task_id ?? 'TASK-001.01'
   try {
@@ -318,6 +334,7 @@ async function start($: any, planId: string, taskId: string) {
       sessionId = await $.session.id()
     }
     sessionTask = { id: task.task_id, plan: plan.plan_id }
+    missingTask = undefined
     nowText = 'starting'
     nowAt = await $.clock.now()
     expanded.add(plan.plan_id)
@@ -429,6 +446,7 @@ export const register: Register = (on, options) => {
     await $.tool.register(FOCUS_SPEC)
     await refresh($)
     await restoreFromLive($)
+    $.ui.invalidate('ui.render')
     await beat($)
     heartbeat?.cancel()
     heartbeat = $.clock.every(60_000, () => {
@@ -448,6 +466,7 @@ export const register: Register = (on, options) => {
     }
     if (e.reason === 'clear') {
       sessionTask = undefined
+      missingTask = undefined
       nowText = undefined
       askedModel = false
       isFresh = true
@@ -500,6 +519,7 @@ export const register: Register = (on, options) => {
       armed = undefined
     }
     sessionTask = { id, plan: found.plan.plan_id }
+    missingTask = undefined
     nowText = input.done ? 'done' : String(input.now ?? '').trim().slice(0, 80) || undefined
     nowAt = await $.clock.now()
     await beat($)
@@ -532,6 +552,7 @@ export const register: Register = (on, options) => {
       const found = findTask(id)
       if (found && found.task.status === 'In Progress' && sessionTask?.id !== id) {
         sessionTask = { id, plan: found.plan.plan_id }
+        missingTask = undefined
         expanded.add(found.plan.plan_id)
         showOthers = false
         selected = undefined
@@ -577,6 +598,7 @@ export const register: Register = (on, options) => {
     }
 
     const current = sessionTask ? findTask(sessionTask.id) : undefined
+    const lostId = current ? undefined : (sessionTask?.id ?? missingTask)
     const active = plans.filter(plan => plan.state === 'Active')
     const pickedRow = selected ? findTask(selected) : undefined
 
@@ -737,6 +759,14 @@ export const register: Register = (on, options) => {
             </Text>
             <Text>{cut(`${current.task.task_id} · ${current.task.title}`, width)}</Text>
             {nowText ? <Text dimColor>{cut(nowLine(nowText, now - nowAt), width)}</Text> : null}
+          </Box>
+        ) : lostId ? (
+          <Box flexDirection="column">
+            <Text color={AMBER}>▲ THIS SESSION</Text>
+            <Text>{cut(`${lostId} · not in the tracker's list`, width)}</Text>
+            <Text color="warning" wrap="wrap">
+              Its task file may not parse. Run the tracker's validate command to see why.
+            </Text>
           </Box>
         ) : null}
         <Box flexDirection="column">{rows}</Box>
