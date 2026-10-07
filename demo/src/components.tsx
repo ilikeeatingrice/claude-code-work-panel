@@ -166,7 +166,20 @@ export const TerminalWindow: React.FC<{
 
 /* ---------- chat area ---------- */
 
-export type ChatLine = {kind: 'user' | 'agent' | 'dim'; text: string};
+export type ChatLine = {kind: 'user' | 'agent' | 'dim'; text: string; accent?: string};
+
+// Render text, colouring the part after `accent` starts (amber).
+const Accented: React.FC<{text: string; accent?: string}> = ({text, accent}) => {
+  if (!accent) return <>{text}</>;
+  const i = text.indexOf(accent.slice(0, Math.min(accent.length, 12)));
+  if (i < 0) return <>{text}</>;
+  return (
+    <>
+      {text.slice(0, i)}
+      <span style={{color: C.amber}}>{text.slice(i)}</span>
+    </>
+  );
+};
 
 export const Chat: React.FC<{lines: ChatLine[]; width: number}> = ({lines, width}) => (
   <div style={{padding: '26px 30px', width, fontSize: TERM_FONT, lineHeight: '34px'}}>
@@ -184,7 +197,7 @@ export const Chat: React.FC<{lines: ChatLine[]; width: number}> = ({lines, width
           }}
         >
           <span style={{color: C.dim}}>{'> '}</span>
-          {l.text}
+          <Accented text={l.text} accent={l.accent} />
         </div>
       ) : (
         <div key={i} style={{display: 'flex', gap: 14, margin: '0 0 10px 0', color: l.kind === 'dim' ? C.dim : C.text}}>
@@ -245,6 +258,7 @@ export type Task = {
   flash?: number; // 0..1 amber flash
   shake?: number; // 0..1 shake
   appear?: number; // 0..1
+  glow?: number; // 0..1 teal glow on the glyph
 };
 
 export type Roadmap = {
@@ -304,7 +318,7 @@ export const rowTop = (roadmaps: Roadmap[], key: string): number => {
         y += LH;
         if (t.sub) y += LH - 6;
       }
-      y += LH;
+      if (r.done > 0) y += LH;
     }
   }
   return y;
@@ -397,7 +411,15 @@ export const Panel: React.FC<PanelProps> = ({
                     }}
                   >
                     <div style={{height: LH, display: 'flex', alignItems: 'center', padding: '0 12px 0 40px'}}>
-                      <span style={{color: glyphColor(t), width: 30}}>{glyph[t.state]}</span>
+                      <span
+                        style={{
+                          color: glyphColor(t),
+                          width: 30,
+                          textShadow: t.glow ? `0 0 ${t.glow * 14}px ${C.teal}` : undefined,
+                        }}
+                      >
+                        {glyph[t.state]}
+                      </span>
                       <span style={{color: C.dim, width: 64}}>{t.id}</span>
                       <span
                         style={{
@@ -444,10 +466,12 @@ export const Panel: React.FC<PanelProps> = ({
                   </div>
                 );
               })}
-              <div style={{height: LH, display: 'flex', alignItems: 'center', padding: '0 12px 0 40px', color: C.faint}}>
-                <span style={{width: 30}}>✓</span>
-                {r.done} done
-              </div>
+              {r.done > 0 ? (
+                <div style={{height: LH, display: 'flex', alignItems: 'center', padding: '0 12px 0 40px', color: C.faint}}>
+                  <span style={{width: 30}}>✓</span>
+                  {r.done} done
+                </div>
+              ) : null}
             </>
           ) : null}
         </div>

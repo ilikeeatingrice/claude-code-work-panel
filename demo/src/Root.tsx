@@ -1,16 +1,16 @@
 import React from 'react';
 import {AbsoluteFill, Composition, Sequence, interpolate, useCurrentFrame} from 'remotion';
-import {SceneClearOther, SceneClearSame, SceneEnd, SceneHook, SceneLive, SceneOpen, SceneStart} from './scenes';
+import {SceneClearOther, SceneClearSame, SceneCreate, SceneEnd, SceneLive, SceneProblem, SceneStartable} from './scenes';
 import {FPS, H, W} from './theme';
 
 export const SCENES: {name: string; dur: number; C: React.FC}[] = [
-  {name: 'Hook', dur: 120, C: SceneHook},
-  {name: 'Open the panel', dur: 300, C: SceneOpen},
-  {name: 'Start', dur: 240, C: SceneStart},
-  {name: 'Clear and start (same roadmap)', dur: 420, C: SceneClearSame},
+  {name: 'Problem: big work, many sessions', dur: 210, C: SceneProblem},
+  {name: 'Design, then /work create', dur: 510, C: SceneCreate},
+  {name: 'Only startable work', dur: 240, C: SceneStartable},
+  {name: 'Clear and start (same roadmap)', dur: 570, C: SceneClearSame},
   {name: 'Clear and start (other roadmap)', dur: 180, C: SceneClearOther},
-  {name: 'Liveness', dur: 300, C: SceneLive},
-  {name: 'End card', dur: 180, C: SceneEnd},
+  {name: 'One task, one agent', dur: 210, C: SceneLive},
+  {name: 'End card', dur: 210, C: SceneEnd},
 ];
 
 const TOTAL = SCENES.reduce((s, x) => s + x.dur, 0);

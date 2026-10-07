@@ -42,7 +42,12 @@ let heartbeat: { cancel: () => void } | undefined
 // ---------- data ----------
 
 async function refresh($: any) {
-  if (!isEnabled) return
+  if (!isEnabled) await resolveTracker($)
+  if (!isEnabled) {
+    plans = []
+    $.ui.invalidate('ui.render')
+    return
+  }
   try {
     const out = await $.process.run(treeArgv, { cwd: root, timeoutMs: 20_000 })
     if (out.exitCode !== 0) {
@@ -289,21 +294,47 @@ async function resolveTree($: any, command: string): Promise<string[] | undefine
   return words
 }
 
+let treeCommand = ''
+
+// The configured tracker command when its script is here; otherwise the
+// bundled tracker once the folder has a WORK.md registry.
+async function resolveTracker($: any) {
+  const argv = await resolveTree($, treeCommand)
+  if (argv) {
+    treeArgv = argv
+  } else if (await $.fs.exists(`${root}/WORK.md`)) {
+    treeArgv = ['python3', `${$.plugin.root}/tracker/roadmap.py`, 'tree', '--json']
+  } else {
+    isEnabled = false
+    return
+  }
+  isEnabled = true
+}
+
+function createPrompt(name: string): string {
+  return [
+    `Create a roadmap named "${name}" from the design we discussed in this conversation.`,
+    'Follow the "Create a roadmap from a design" steps of the roadmap skill (work-panel:roadmap):',
+    'write the PLAN.md, cut the slices, show me the dry-run preview, and wait for my OK before anything is written.',
+  ].join(' ')
+}
+
 export const register: Register = (on, options) => {
   const settings = options as { treeCommand?: string; startHint?: string; noteAuthor?: string }
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     root = e.cwd
-    const argv = await resolveTree($, settings.treeCommand || 'scripts/work_tracker.py tree --json')
-    isEnabled = argv !== undefined
-    if (!argv) return started
-    treeArgv = argv
+    treeCommand = settings.treeCommand || 'scripts/work_tracker.py tree --json'
     startHint = settings.startHint ?? ''
     noteAuthor = settings.noteAuthor || '@claude'
     const home = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
     liveDir = `${home}/.claude/work-panel/live`
     sessionId = await $.session.id()
-    await $.command.register({ name: 'work', description: 'Show or hide the Work panel (roadmaps and tasks)' })
+    await $.command.register({
+      name: 'work',
+      description: 'Show or hide the Work panel; /work create <name> turns the design discussed here into a roadmap',
+      argumentHint: '[create <name>]',
+    })
     await refresh($)
     await beat($)
     heartbeat?.cancel()
@@ -330,8 +361,15 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  on('command.run', { command: 'work' }, async $ => {
-    if (!isEnabled) return { text: 'Work panel: no tracker here (see the treeCommand setting).' }
+  on('command.run', { command: 'work' }, async ($, e) => {
+    const args = (e.args ?? '').trim()
+    if (/^create\b/i.test(args)) {
+      const name = args.replace(/^create\b/i, '').trim()
+      if (!name) return { text: 'Usage: /work create <roadmap name>' }
+      if (isTurnRunning) return { text: 'Work panel: wait for the current turn to finish, then /work create again.' }
+      $.clock.after(50, () => void $.prompt.submit({ text: createPrompt(name) }))
+      return { text: `Work panel: asked the agent to draft the roadmap "${name}". It will show a preview first.` }
+    }
     const panes = await $.ui.panes()
     // A pane opened unasked waits undrawn below 144 columns: only one the
     // person can see is closed; otherwise /work opens it for real.
@@ -382,7 +420,15 @@ export const register: Register = (on, options) => {
     const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(1, n - 1))}…` : s)
     const now = Date.now()
 
-    if (!isEnabled) return <Text dimColor>No task tracker in this folder.</Text>
+    if (!isEnabled) {
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Text bold>WORK</Text>
+          <Text dimColor wrap="wrap">No roadmaps here yet.</Text>
+          <Text wrap="wrap">{'Talk through a design with the agent, then type /work create <name>.'}</Text>
+        </Box>
+      )
+    }
     if (loadError && !plans.length) {
       return (
         <Box flexDirection="column">
@@ -517,7 +563,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="row" justifyContent="space-between">
           <Text bold>WORK</Text>
-          <Text dimColor>{`${active.length} roadmaps · /work hides`}</Text>
+          <Text dimColor>{`${active.length} roadmap${active.length === 1 ? '' : 's'} · /work hides`}</Text>
         </Box>
         {current ? (
           <Box flexDirection="column" borderStyle="round" borderColor={AMBER} paddingX={1}>
