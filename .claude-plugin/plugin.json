@@ -2,7 +2,9 @@
   "name": "work-panel",
   "version": "0.1.0",
   "description": "A right-side Claude Code panel for your task tracker: browse roadmaps, start a ready task, and clear-and-start with a handoff note when you stay in the same roadmap",
-  "author": { "name": "ilikeeatingrice" },
+  "author": {
+    "name": "ilikeeatingrice"
+  },
   "homepage": "https://github.com/ilikeeatingrice/claude-code-work-panel",
   "license": "MIT",
   "types": "./types/index.d.ts",
@@ -16,7 +18,7 @@
     "startHint": {
       "type": "string",
       "title": "First-message hint",
-      "description": "Added to the first message of a started task, e.g. 'Use the work-tracker skill.'",
+      "description": "Added to the first message of a started task. Empty means 'Use the roadmap skill (work-panel:roadmap).'; a project with its own skill can name it here.",
       "default": ""
     },
     "noteAuthor": {

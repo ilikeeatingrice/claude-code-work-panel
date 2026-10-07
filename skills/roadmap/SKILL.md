@@ -33,7 +33,7 @@ Done when: the roadmap is registered, `validate` prints `OK` (or only errors tha
 
 ## Hand off and finish
 
-At session end, append one journal record to the task with the shape in [references/journal.md](references/journal.md). Update acceptance checkboxes honestly. A task you did not finish stays In Progress, or becomes Blocked with a `Resume condition:` line. A task becomes Done only when every acceptance criterion is checked and the final summary is written.
+At session end, append one journal record to the task with the shape in [references/journal.md](references/journal.md). Tick acceptance and done checkboxes (`- [x]`) by editing the task file honestly; `RM status` changes only the status line. A task you did not finish stays In Progress, or becomes Blocked with a `Resume condition:` line. A task becomes Done only when every acceptance criterion is checked and the final summary is written.
 
 The Work Panel's "Clear and start" writes the handoff record for you when the next task is in the same roadmap.
 

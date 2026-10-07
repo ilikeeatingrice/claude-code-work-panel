@@ -272,8 +272,16 @@ async function start($: any, planId: string, taskId: string) {
 
 // ---------- hooks ----------
 
-async function openPane($: any) {
-  const opened = await $.ui.open({ id: PANE, title: 'Work', columns: 58, focus: true })
+// About 30% of the terminal, 56-96 columns; remembered for opens at startup.
+function paneColumns(terminalColumns: number | undefined): number {
+  return Math.min(96, Math.max(56, Math.round((terminalColumns ?? 190) * 0.3)))
+}
+
+async function openPane($: any, terminalColumns?: number) {
+  const stored = await $.store.get('columns')
+  const columns = terminalColumns ? paneColumns(terminalColumns) : typeof stored === 'number' ? stored : paneColumns(undefined)
+  await $.store.set('columns', columns)
+  const opened = await $.ui.open({ id: PANE, title: 'Work', columns, focus: true })
   await $.store.set('open', true)
   return opened
 }
@@ -325,7 +333,7 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     root = e.cwd
     treeCommand = settings.treeCommand || 'scripts/work_tracker.py tree --json'
-    startHint = settings.startHint ?? ''
+    startHint = settings.startHint || 'Use the roadmap skill (work-panel:roadmap).'
     noteAuthor = settings.noteAuthor || '@claude'
     const home = (await $.process.run(['printenv', 'HOME'])).stdout.trim()
     liveDir = `${home}/.claude/work-panel/live`
@@ -341,7 +349,10 @@ export const register: Register = (on, options) => {
     heartbeat = $.clock.every(60_000, () => {
       void beat($).then(() => (isTurnRunning ? undefined : refresh($)))
     })
-    if ((await $.store.get('open')) === true) void $.ui.open({ id: PANE, title: 'Work', columns: 58 })
+    if ((await $.store.get('open')) === true) {
+      const stored = await $.store.get('columns')
+      void $.ui.open({ id: PANE, title: 'Work', columns: typeof stored === 'number' ? stored : paneColumns(undefined) })
+    }
     return started
   })
 
@@ -379,7 +390,7 @@ export const register: Register = (on, options) => {
       return { text: 'Work panel hidden.' }
     }
     await refresh($)
-    const opened = await openPane($)
+    const opened = await openPane($, e.presentation?.columns)
     return { text: opened.isPlaced ? 'Work panel open.' : 'Work panel waits for a wider terminal.' }
   })
 
@@ -416,7 +427,8 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
-    const width = Math.max(30, (e.viewport?.columns ?? 58) - 2)
+    // The pane's own body width (viewport.columns is the whole conversation's).
+    const width = Math.max(30, (e.props?.bodyColumns ?? 58) - 1)
     const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(1, n - 1))}…` : s)
     const now = Date.now()
 
@@ -566,9 +578,9 @@ export const register: Register = (on, options) => {
           <Text dimColor>{`${active.length} roadmap${active.length === 1 ? '' : 's'} · /work hides`}</Text>
         </Box>
         {current ? (
-          <Box flexDirection="column" borderStyle="round" borderColor={AMBER} paddingX={1}>
-            <Text color={AMBER}>THIS SESSION</Text>
-            <Text wrap="truncate-end">{`${current.task.task_id} · ${current.task.title}`}</Text>
+          <Box flexDirection="column">
+            <Text color={AMBER}>▲ THIS SESSION</Text>
+            <Text>{cut(`${current.task.task_id} · ${current.task.title}`, width)}</Text>
           </Box>
         ) : null}
         <Box flexDirection="column">{rows}</Box>
