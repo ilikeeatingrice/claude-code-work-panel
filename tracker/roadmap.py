@@ -590,7 +590,7 @@ def set_status(root: Path, task_id: str, status: str, assignee: str | None) -> N
     lines[status_index] = f"status: {status}{newline}"
     if assignee is not None:
         assignee_index = next((i for i in range(1, end) if re.match(r"^assignee:\s*", lines[i])), None)
-        replacement = f"assignee: [{assignee}]{newline}"
+        replacement = f"assignee: [{json.dumps(assignee)}]{newline}"
         if assignee_index is None:
             lines.insert(status_index + 1, replacement)
         else:

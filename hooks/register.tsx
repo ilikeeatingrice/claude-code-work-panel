@@ -35,9 +35,10 @@ let busy: string | undefined
 let problem: string | undefined
 let sessionTask: { id: string; plan: string } | undefined
 let showOthers = false
+let nowText: string | undefined
+let nowAt = 0
 let isTurnRunning = false
 let isFresh = true
-let touched = new Set<string>()
 let heartbeat: { cancel: () => void } | undefined
 
 // ---------- data ----------
@@ -76,19 +77,6 @@ async function refresh($: any) {
   } catch {
     isFresh = false
   }
-  if (sessionTask === undefined) {
-    // A session that claimed a task by itself: a task this turn touched that is
-    // now In Progress becomes this session's task.
-    for (const id of touched) {
-      const found = findTask(id)
-      if (found && found.task.status === 'In Progress') {
-        sessionTask = { id, plan: found.plan.plan_id }
-        expanded.add(found.plan.plan_id)
-        showOthers = false
-      }
-    }
-  }
-  touched = new Set()
   $.ui.invalidate('ui.render')
 }
 
@@ -167,6 +155,11 @@ function agoText(ms: number): string {
   const h = Math.round(min / 60)
   if (h < 48) return `${h}h`
   return `${Math.round(h / 24)}d`
+}
+
+function nowLine(text: string, ageMs: number): string {
+  const ago = ageMs < 60_000 ? 'just now' : `${agoText(ageMs)} ago`
+  return text === 'done' ? `finished ${ago}` : `now: ${text} · ${ago}`
 }
 
 function shortId(id: string): string {
@@ -269,6 +262,8 @@ async function start($: any, planId: string, taskId: string) {
       sessionId = await $.session.id()
     }
     sessionTask = { id: task.task_id, plan: plan.plan_id }
+    nowText = 'starting'
+    nowAt = await $.clock.now()
     expanded.add(plan.plan_id)
     showOthers = false
     selected = undefined
@@ -316,6 +311,22 @@ async function resolveTree($: any, command: string): Promise<string[] | undefine
 
 let treeCommand = ''
 
+const FOCUS_TOOL = 'mcp__work-panel__focus'
+const FOCUS_SPEC = {
+  name: 'focus',
+  description:
+    "Tell the Work Panel (the task list beside this conversation) which tracked task this session is working on and what you are doing right now. Call it when you claim or switch to a task, at each milestone (a new step, tests running, waiting on the person), and with done: true when the task is finished. Keep `now` to a short phrase, e.g. 'writing tests for coupon rules'. It only updates the panel; it changes no files.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task_id: { type: 'string', description: 'The tracked task id, e.g. TASK-001.02' },
+      now: { type: 'string', description: 'What you are doing right now, a short phrase (under 60 characters)' },
+      done: { type: 'boolean', description: 'True when the task is finished' },
+    },
+    required: ['task_id', 'now'],
+  },
+}
+
 function bundledArgv($: any): string[] {
   return ['python3', `${$.plugin.root}/tracker/roadmap.py`, 'tree', '--json']
 }
@@ -359,6 +370,7 @@ export const register: Register = (on, options) => {
       description: 'Show or hide the Work panel; /work create <name> turns the design discussed here into a roadmap',
       argumentHint: '[create <name>]',
     })
+    await $.tool.register(FOCUS_SPEC)
     await refresh($)
     await beat($)
     heartbeat?.cancel()
@@ -379,6 +391,7 @@ export const register: Register = (on, options) => {
     }
     if (e.reason === 'clear') {
       sessionTask = undefined
+      nowText = undefined
       isFresh = true
     }
     return next(e)
@@ -411,14 +424,61 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The agent reports its task and what it is doing now; the panel shows it.
+  on('tool.call', { tool: FOCUS_TOOL }, async ($, e) => {
+    const input = e as unknown as { task_id?: string; now?: string; done?: boolean }
+    const id = String(input.task_id ?? '').trim().toUpperCase()
+    let found = findTask(id)
+    if (!found) {
+      await refresh($)
+      found = findTask(id)
+    }
+    if (!found) return { result: `Work Panel: no task ${id} in this folder's tracker; nothing changed.` }
+    if (sessionTask?.id !== id) {
+      expanded.add(found.plan.plan_id)
+      showOthers = false
+      selected = undefined
+      armed = undefined
+    }
+    sessionTask = { id, plan: found.plan.plan_id }
+    nowText = input.done ? 'done' : String(input.now ?? '').trim().slice(0, 80) || undefined
+    nowAt = await $.clock.now()
+    await beat($)
+    $.ui.invalidate('ui.render')
+    return { result: `Work Panel shows this session on ${id}${nowText ? ` (now: ${nowText})` : ''}.` }
+  }).catch(() => ({ result: 'Work Panel could not update; carry on with the task.' }))
+
+  // This session's task follows its claims as they happen: after a tool call
+  // that names a task and looks like a status change, the tracker is re-read,
+  // and a named task that has just become In Progress is this session's task.
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
-    if (!isEnabled || sessionTask) return result
+    if (!isEnabled || e.tool === FOCUS_TOOL) return result
     const fields = e as unknown as Record<string, unknown>
-    const text = [fields.command, fields.file_path].filter(v => typeof v === 'string').join(' ')
-    if (text.includes('backlog')) {
-      for (const match of text.matchAll(/\b([a-z][a-z0-9]*)-(\d+(?:\.\d+)*)\b/gi)) {
-        touched.add(`${match[1]!.toUpperCase()}-${match[2]}`)
+    const text = [fields.command, fields.file_path, fields.new_string, fields.content]
+      .filter(v => typeof v === 'string')
+      .join(' ')
+    if (!/in progress|status|tasks\//i.test(text)) return result
+    const named = new Set<string>()
+    for (const match of text.matchAll(/\b([a-z][a-z0-9]*)-(\d+(?:\.\d+)*)\b/gi)) {
+      named.add(`${match[1]!.toUpperCase()}-${match[2]}`)
+    }
+    const before = [...named].filter(id => {
+      const found = findTask(id)
+      return found !== undefined && found.task.status !== 'In Progress'
+    })
+    if (!before.length) return result
+    await refresh($)
+    for (const id of before) {
+      const found = findTask(id)
+      if (found && found.task.status === 'In Progress' && sessionTask?.id !== id) {
+        sessionTask = { id, plan: found.plan.plan_id }
+        expanded.add(found.plan.plan_id)
+        showOthers = false
+        selected = undefined
+        armed = undefined
+        await beat($)
+        $.ui.invalidate('ui.render')
       }
     }
     return result
@@ -604,8 +664,11 @@ export const register: Register = (on, options) => {
         </Box>
         {current ? (
           <Box flexDirection="column">
-            <Text color={AMBER}>▲ THIS SESSION</Text>
+            <Text color={AMBER}>
+              {current.task.status === 'Done' || current.task.completed ? '▲ THIS SESSION · done' : '▲ THIS SESSION'}
+            </Text>
             <Text>{cut(`${current.task.task_id} · ${current.task.title}`, width)}</Text>
+            {nowText ? <Text dimColor>{cut(nowLine(nowText, now - nowAt), width)}</Text> : null}
           </Box>
         ) : null}
         <Box flexDirection="column">{rows}</Box>

@@ -42,6 +42,18 @@ Python 3.10+ is needed for the tracker. No other dependencies.
 | `■` | Blocked: shows its resume condition | No |
 | `✓` | Done, folded into one `N done` line | No |
 
+### What this session is doing
+
+Once a session has a task, the panel shows only that task's roadmap (the rest fold into one row) and a header:
+
+```
+▲ THIS SESSION
+TASK-001.02 · Guest checkout without an account
+now: writing tests for the guest token · 2m ago
+```
+
+The agent keeps it current through a small `focus` tool the plugin gives it: it calls it when it claims or switches a task, at each milestone, and when it finishes. If an agent never calls it, the panel still follows its claims: after a tool call that marks a task In Progress, the panel switches to that task.
+
 ### What the button does
 
 | Your session | Button | What happens |

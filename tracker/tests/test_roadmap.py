@@ -269,8 +269,17 @@ def test_status_preserves_every_other_line(tmp_path):
     path = tmp_path / "backlog" / "tasks" / "a.md"
     roadmap.set_status(tmp_path, "WORK-001", "In Progress", "@new")
     changed = path.read_text()
-    expected = original.replace("status: To Do", "status: In Progress").replace("assignee:\n  - @old", "assignee: [@new]")
+    expected = original.replace("status: To Do", "status: In Progress").replace("assignee:\n  - @old", 'assignee: ["@new"]')
     assert changed == expected
+
+
+def test_status_assignee_is_valid_yaml(tmp_path):
+    yaml = pytest.importorskip("yaml")
+    setup_repo(tmp_path, tasks={"a.md": task_text("WORK-001")})
+    roadmap.set_status(tmp_path, "WORK-001", "In Progress", "@claude")
+    text = (tmp_path / "backlog" / "tasks" / "a.md").read_text()
+    front = text.split("---\n")[1]
+    assert yaml.safe_load(front)["assignee"] == ["@claude"]
 
 
 def test_status_and_comment_preserve_crlf_prefix(tmp_path):

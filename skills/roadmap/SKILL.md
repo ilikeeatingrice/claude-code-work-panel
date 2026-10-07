@@ -30,6 +30,7 @@ Done when: the roadmap is registered, `validate` prints `OK` (or only errors tha
 3. If the task was already In Progress, read its latest journal record first and record the takeover in your claim comment.
 4. If the first message named a handoff note on another task, read that task's latest journal record before you start.
 5. Work against the acceptance criteria; keep findings in the journal, not in a second notes file.
+6. **Keep the Work Panel current.** When the `focus` tool of the work-panel plugin is available, call it right after you claim or switch to a task, at each milestone (a new step, tests running, waiting on the person), and with `done: true` when the task is finished. One short `now` phrase each time.
 
 ## Hand off and finish
 
