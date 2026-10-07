@@ -1,0 +1,29 @@
+{
+  "name": "work-panel",
+  "version": "0.1.0",
+  "description": "A right-side Claude Code panel for your task tracker: browse roadmaps, start a ready task, and clear-and-start with a handoff note when you stay in the same roadmap",
+  "author": { "name": "ilikeeatingrice" },
+  "homepage": "https://github.com/ilikeeatingrice/claude-code-work-panel",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "treeCommand": {
+      "type": "string",
+      "title": "Tracker command",
+      "description": "Run in the session folder; prints the roadmap tree as JSON (see README). A first word with a slash must exist in that folder; a .py script runs with the folder's .venv python or python3.",
+      "default": "scripts/work_tracker.py tree --json"
+    },
+    "startHint": {
+      "type": "string",
+      "title": "First-message hint",
+      "description": "Added to the first message of a started task, e.g. 'Use the work-tracker skill.'",
+      "default": ""
+    },
+    "noteAuthor": {
+      "type": "string",
+      "title": "Handoff note author",
+      "description": "The author written on handoff notes in the task journal.",
+      "default": "@claude"
+    }
+  }
+}

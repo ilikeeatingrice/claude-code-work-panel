@@ -1,0 +1,22 @@
+{
+  "name": "work-panel-demo",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts WorkPanelDemo out/work-panel-demo.mp4 --codec=h264 --crf=18",
+    "gif": "bash scripts/gif.sh",
+    "stills": "bash scripts/stills.sh"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.533",
+    "@remotion/google-fonts": "4.0.533",
+    "remotion": "4.0.533",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  }
+}

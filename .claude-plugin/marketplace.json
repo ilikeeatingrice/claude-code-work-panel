@@ -1,0 +1,16 @@
+{
+  "name": "claude-code-work-panel",
+  "owner": {
+    "name": "ilikeeatingrice"
+  },
+  "plugins": [
+    {
+      "name": "work-panel",
+      "source": "./",
+      "description": "A right-side panel for your task tracker: browse roadmaps, start a ready task, clear-and-start with a same-roadmap handoff note"
+    }
+  ],
+  "metadata": {
+    "description": "Work Panel: a Claude Code mod for picking up tracked work"
+  }
+}
