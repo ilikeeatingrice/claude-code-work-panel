@@ -49,7 +49,17 @@ async function refresh($: any) {
     return
   }
   try {
-    const out = await $.process.run(treeArgv, { cwd: root, timeoutMs: 20_000 })
+    let out = await $.process.run(treeArgv, { cwd: root, timeoutMs: 20_000 })
+    const bundled = bundledArgv($)
+    if (out.exitCode !== 0 && treeArgv.join(' ') !== bundled.join(' ') && (await $.fs.exists(`${root}/WORK.md`))) {
+      // The configured tracker failed (an older copy without `tree`, say);
+      // the bundled one reads the same files.
+      const retry = await $.process.run(bundled, { cwd: root, timeoutMs: 20_000 })
+      if (retry.exitCode === 0) {
+        treeArgv = bundled
+        out = retry
+      }
+    }
     if (out.exitCode !== 0) {
       loadError = (out.stderr || out.stdout || 'tree failed').trim().split('\n').slice(-1)[0]
     } else {
@@ -281,9 +291,7 @@ async function openPane($: any, terminalColumns?: number) {
   const stored = await $.store.get('columns')
   const columns = terminalColumns ? paneColumns(terminalColumns) : typeof stored === 'number' ? stored : paneColumns(undefined)
   await $.store.set('columns', columns)
-  const opened = await $.ui.open({ id: PANE, title: 'Work', columns, focus: true })
-  await $.store.set('open', true)
-  return opened
+  return $.ui.open({ id: PANE, title: 'Work', columns, focus: true })
 }
 
 // The command's first word: a script path relative to the session folder
@@ -304,6 +312,10 @@ async function resolveTree($: any, command: string): Promise<string[] | undefine
 
 let treeCommand = ''
 
+function bundledArgv($: any): string[] {
+  return ['python3', `${$.plugin.root}/tracker/roadmap.py`, 'tree', '--json']
+}
+
 // The configured tracker command when its script is here; otherwise the
 // bundled tracker once the folder has a WORK.md registry.
 async function resolveTracker($: any) {
@@ -311,7 +323,7 @@ async function resolveTracker($: any) {
   if (argv) {
     treeArgv = argv
   } else if (await $.fs.exists(`${root}/WORK.md`)) {
-    treeArgv = ['python3', `${$.plugin.root}/tracker/roadmap.py`, 'tree', '--json']
+    treeArgv = bundledArgv($)
   } else {
     isEnabled = false
     return
@@ -349,10 +361,6 @@ export const register: Register = (on, options) => {
     heartbeat = $.clock.every(60_000, () => {
       void beat($).then(() => (isTurnRunning ? undefined : refresh($)))
     })
-    if ((await $.store.get('open')) === true) {
-      const stored = await $.store.get('columns')
-      void $.ui.open({ id: PANE, title: 'Work', columns: typeof stored === 'number' ? stored : paneColumns(undefined) })
-    }
     return started
   })
 
@@ -386,18 +394,12 @@ export const register: Register = (on, options) => {
     // person can see is closed; otherwise /work opens it for real.
     if (panes.some(pane => pane.id === PANE && pane.isPlaced && pane.isShown)) {
       await $.ui.close({ id: PANE })
-      await $.store.set('open', false)
       return { text: 'Work panel hidden.' }
     }
     await refresh($)
     const opened = await openPane($, e.presentation?.columns)
     return { text: opened.isPlaced ? 'Work panel open.' : 'Work panel waits for a wider terminal.' }
   })
-
-  on('ui.close', { id: PANE }, async ($, e, next) => {
-    if (e.origin.kind === 'person') await $.store.set('open', false)
-    return next(e)
-  }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
     isTurnRunning = true

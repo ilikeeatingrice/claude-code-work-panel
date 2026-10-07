@@ -28,7 +28,7 @@ Python 3.10+ is needed for the tracker. No other dependencies.
 
 1. **Design.** Discuss the feature with the agent as usual.
 2. **Create.** `/work create checkout-redesign`. The agent writes `docs/programs/checkout-redesign/PLAN.md`, then shows the preview: every task, and what each one waits on. Reply OK (or ask for changes).
-3. **Open the panel.** `/work` shows or hides it. Arrow keys move, Enter opens a roadmap or picks a task.
+3. **Open the panel.** `/work` shows it; it stays until you type `/work` again. New sessions start with it hidden. Arrow keys move, Enter opens a roadmap or picks a task.
 4. **Start.** Pick a `●` task. In a fresh session the button is **Start**; it sends the first message, and the agent claims the task.
 5. **Next task.** When a task is done, pick the next one and press **Clear and start** (twice, to confirm).
 
