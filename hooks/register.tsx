@@ -622,6 +622,9 @@ export const register: Register = (on, options) => {
         const mark =
           task.status === 'In Progress' ? '◐' : task.status === 'Blocked' ? '■' : s.canStart ? '●' : '○'
         const isPicked = selected === task.task_id
+        // A task someone is on right now is drawn in teal; this session's own, bold.
+        const isMine = s.why === 'this session'
+        const working = isMine || s.why === 'being worked on now'
         const label = `  ${isPicked ? '▶' : mark} ${shortId(task.task_id).padEnd(4)} ${cut(task.title, width - 12)}`
         rows.push(
           s.canStart ? (
@@ -638,14 +641,20 @@ export const register: Register = (on, options) => {
               }}
             />
           ) : (
-            <Text key={`t-${task.task_id}`} dimColor color={task.status === 'Blocked' ? AMBER : undefined} wrap="truncate-end">
+            <Text
+              key={`t-${task.task_id}`}
+              dimColor={!working}
+              bold={isMine}
+              color={working ? TEAL : task.status === 'Blocked' ? AMBER : undefined}
+              wrap="truncate-end"
+            >
               {label}
             </Text>
           ),
         )
         if (s.why) {
           rows.push(
-            <Text key={`w-${task.task_id}`} dimColor wrap="truncate-end">
+            <Text key={`w-${task.task_id}`} dimColor={!isMine} color={working ? TEAL : undefined} wrap="truncate-end">
               {`         ${cut(s.why, width - 10)}`}
             </Text>,
           )
