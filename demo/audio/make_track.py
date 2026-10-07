@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate the demo's original soundtrack: audio/track.wav.
 
-120 BPM, 4/4, 23 bars (46 s), tech-house feel, built only from numpy maths:
+120 BPM, 4/4, 25 bars (50 s): a 2-bar title intro, then the 23-bar story.
+Tech-house feel, built only from numpy maths:
 kick, offbeat hats, clap, sidechain-pumped bass, a short chord-stab motif,
 a riser into a drop on bar 14 (the /clear moment in the video), and a short
 outro that ends on a button hit on bar 22.
@@ -27,8 +28,10 @@ SR = 44100
 BPM = 120
 BEAT = 60.0 / BPM  # 0.5 s
 BAR = 4 * BEAT  # 2 s
-BARS = 23
-DUR = BARS * BAR  # 46 s
+INTRO = 2  # title-card bars before the story (story bar 0 starts at 4 s)
+STORY_BARS = 23
+BARS = INTRO + STORY_BARS
+DUR = BARS * BAR  # 50 s
 N = int(DUR * SR)
 TARGET_LUFS = -14.0
 CEILING = 10 ** (-1.3 / 20)  # soft limiter ceiling, about -1.3 dBFS
@@ -43,7 +46,8 @@ VERB_R = np.zeros(N)
 
 
 def t_of(bar: float, beat: float = 0.0) -> float:
-    return bar * BAR + beat * BEAT
+    """Time of a story bar (bar -2 and -1 are the title intro)."""
+    return (bar + INTRO) * BAR + beat * BEAT
 
 
 def midi(m: float) -> float:
@@ -192,7 +196,7 @@ DROP = 14
 END_HIT = 22
 
 kick_times = []
-for bar in range(BARS):
+for bar in range(STORY_BARS):
     ch = CHORDS[bar % 4]
     root = ROOTS[bar % 4]
     if bar in KICK_BARS:
@@ -228,6 +232,33 @@ for bar in range(BARS):
             place(sr_, t_of(bar, pos), gain=g, pan=0.35, bus="sc", send=0.25)
     if bar in PAD_BARS:
         place(pad(ch, BAR + 0.3), t_of(bar), gain=1.4 if bar < 2 else 1.0, bus="sc", send=0.3)
+
+# title intro (bars -2, -1): filtered pad, soft ticks, a light blip under each highlight chip
+def tick(gain=1.0):
+    t = tt(0.03)
+    n = rng.standard_normal(len(t))
+    n = n - np.convolve(n, np.ones(3) / 3, mode="same")
+    n = np.convolve(n, [0.5, 0.5], mode="same")
+    return n * np.exp(-t * 160) * 0.25 * gain
+
+
+def blip(m):
+    t = tt(0.35)
+    f = midi(m)
+    return (np.sin(2 * np.pi * f * t) + 0.25 * np.sin(2 * np.pi * 2 * f * t)) * np.exp(-t * 9) * np.minimum(1, t / 0.004) * 0.12
+
+
+for bar in (-2, -1):
+    place(pad(CHORDS[0] if bar == -2 else CHORDS[3], BAR + 0.3), t_of(bar), gain=1.2, bus="sc", send=0.35)
+    for b in range(4):
+        place(tick(0.5 + 0.15 * (bar + 2)), t_of(bar, b), gain=1.0, pan=-0.2)
+        if bar == -1:
+            place(hat(), t_of(bar, b + 0.5), gain=0.35, pan=0.25)
+# a blip on each chip beat (title card: -2.2, -2.3, -1.0), rising A minor notes
+for (bar, b), m in zip([(-2, 2), (-2, 3), (-1, 0)], [76, 79, 81]):
+    place(blip(m), t_of(bar, b), gain=1.0, pan=0.0, send=0.5)
+# a short soft swell into the story on the last beat
+place(riser(BEAT * 1.0) * 0.5, t_of(-1, 3), gain=0.6, send=0.2)
 
 # riser + snare roll into the drop (bar 13)
 place(riser(BAR), t_of(13), gain=1.0, send=0.2)
@@ -273,7 +304,7 @@ L += fft_conv(VERB_L, ir_l) * 0.012
 R += fft_conv(VERB_R, ir_r) * 0.012
 
 # ---------------- section levels (dB per bar, before the limiter) ----------------
-SECTION_DB = {0: -3, 1: -3, 2: -7, 3: -7, 4: -6, 5: -5, 6: -5, 7: -5,
+SECTION_DB = {-2: -4, -1: -3, 0: -3, 1: -3, 2: -7, 3: -7, 4: -6, 5: -5, 6: -5, 7: -5,
               8: -3.5, 9: -3.5, 10: -3.5, 11: -3.5, 12: -3, 13: -4,
               14: 0, 15: 0, 16: 0, 17: 0, 18: 0, 19: -2.5, 20: -2.5, 21: -3, 22: 0}
 lvl = np.ones(N)

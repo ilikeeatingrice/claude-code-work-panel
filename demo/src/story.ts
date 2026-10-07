@@ -387,7 +387,9 @@ export const KEYS: {f: number; key: string; label?: string}[] = [
 ];
 
 /** Every scene boundary, for the sync table and the cut transitions. */
-export const CUTS: {f: number; name: string; kind: 'fade' | 'cut' | 'smash'}[] = [
+export const CUTS: {f: number; name: string; kind: 'fade' | 'cut' | 'smash' | 'push'}[] = [
+  {f: at(S.title), name: 'Title card', kind: 'fade'},
+  {f: at(-1, 3), name: 'Title card push-out (10 frames)', kind: 'push'},
   {f: at(S.problem), name: 'Problem', kind: 'fade'},
   {f: at(S.design), name: 'Session A: design chat', kind: 'fade'},
   {f: at(S.panel), name: 'Session B: fresh session', kind: 'cut'},

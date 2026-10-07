@@ -2,11 +2,13 @@
 // from the nearest beat. Run: npm run sync
 import {FPB, BAR, at, SECTIONS} from '../src/beat';
 import {CAMERA, CAPTIONS, CUTS, KEYS} from '../src/story';
+import {TITLE_BEATS} from '../src/titleBeats';
 
 type Row = {f: number; what: string};
 const rows: Row[] = [
   ...CUTS.map((c) => ({f: c.f, what: `cut (${c.kind}): ${c.name}`})),
   {f: at(SECTIONS.drop), what: 'DROP: /clear sweep starts (8 frames)'},
+  ...TITLE_BEATS.map((t) => ({f: t.f, what: `title card: ${t.text}`})),
   ...KEYS.map((k) => ({f: k.f, what: `key ${k.key}${k.label ? ' ' + k.label : ''}`})),
   ...CAPTIONS.filter((c) => c.text).map((c) => ({f: c.f, what: `caption: ${c.text}`})),
   ...CAMERA.map((c) => ({f: c.f, what: `camera ${c.dur ? `move ${c.dur}f` : 'cut'}`})),

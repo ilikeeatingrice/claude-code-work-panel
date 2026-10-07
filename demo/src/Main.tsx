@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Audio, Easing, interpolate, staticFile, useCurrentFrame} from 'remotion';
 import {at, FPB, SECTIONS as S, TOTAL_FRAMES} from './beat';
 import {build, CAMERA, CAPTIONS, CUTS, KEYS, Rect} from './story';
+import {TITLE_BEATS, TITLE_OUT, TITLE_OUT_FRAMES} from './titleBeats';
 import {CH, CW, DIV, K, TH, TW} from './term/grid';
 
 const DIV_PX = DIV * CW;
@@ -330,6 +331,65 @@ const EndCard: React.FC<{f: number; L: Layout}> = ({f, L}) => {
   );
 };
 
+const TitleCard: React.FC<{f: number; L: Layout}> = ({f, L}) => {
+  const wide = L.W > L.H;
+  const glyph = [
+    ['●', K.teal],
+    ['▲', K.amber],
+    ['◐', K.lavender],
+  ];
+  // eased push-out on the last beat of the card
+  const out = easeIO(clamp01((f - TITLE_OUT) / TITLE_OUT_FRAMES));
+  const [title, sub, ...chips] = TITLE_BEATS;
+  return (
+    <AbsoluteFill
+      style={{
+        background: BG,
+        fontFamily: FONT_MONO,
+        color: '#efe9df',
+        opacity: 1 - out,
+        transform: `scale(${1 + 0.08 * out})`,
+      }}
+    >
+      <AbsoluteFill style={{alignItems: 'center', justifyContent: 'center', flexDirection: 'column'}}>
+        <div style={{fontSize: wide ? 76 : 92, fontWeight: 700, letterSpacing: -2, opacity: beatIn(f, title.f), transform: `translateY(${(1 - beatIn(f, title.f)) * 14}px)`}}>
+          {title.text}
+        </div>
+        <div style={{fontFamily: FONT_SANS, fontSize: wide ? 30 : 38, color: '#a39b8f', marginTop: 12, opacity: beatIn(f, sub.f)}}>
+          {sub.text}
+        </div>
+        <div style={{display: 'flex', flexDirection: wide ? 'row' : 'column', gap: wide ? 20 : 22, marginTop: wide ? 50 : 70, alignItems: 'center'}}>
+          {chips.map((c, i) => {
+            const o = beatIn(f, c.f);
+            return (
+              <div
+                key={c.text}
+                style={{
+                  opacity: o,
+                  transform: `translateY(${(1 - o) * 10}px)`,
+                  fontFamily: FONT_SANS,
+                  fontSize: wide ? 30 : 40,
+                  fontWeight: 500,
+                  padding: wide ? '14px 26px' : '18px 34px',
+                  borderRadius: 12,
+                  border: '1px solid #34302a',
+                  background: '#1b1915',
+                  display: 'flex',
+                  gap: 14,
+                  alignItems: 'center',
+                }}
+              >
+                <span style={{color: glyph[i][1], fontFamily: FONT_MONO}}>{glyph[i][0]}</span>
+                {c.text}
+              </div>
+            );
+          })}
+        </div>
+      </AbsoluteFill>
+    </AbsoluteFill>
+  );
+};
+
 /* ---------------- the whole video ---------------- */
 
 export const Main: React.FC<{L: Layout}> = ({L}) => {
@@ -340,7 +400,8 @@ export const Main: React.FC<{L: Layout}> = ({L}) => {
   return (
     <AbsoluteFill style={{background: BG}}>
       <Audio src={staticFile('track.wav')} />
-      {f < at(S.design) + 8 ? <Intro f={f} L={L} /> : null}
+      {f >= at(S.problem) - 5 && f < at(S.design) + 8 ? <Intro f={f} L={L} /> : null}
+      {f < TITLE_OUT + TITLE_OUT_FRAMES ? <TitleCard f={f} L={L} /> : null}
       {termOn ? (
         <div style={{position: 'absolute', inset: 0, opacity: termIn, transform: `scale(${0.98 + 0.02 * termIn})`}}>
           {L.stacked ? <TermStacked f={f} L={L} /> : <TermView f={f} L={L} />}
@@ -351,7 +412,7 @@ export const Main: React.FC<{L: Layout}> = ({L}) => {
           <EndCard f={f} L={L} />
         </div>
       ) : null}
-      {f < at(S.end) ? (
+      {f >= at(S.problem) && f < at(S.end) ? (
         <>
           <div style={{position: 'absolute', left: 0, right: 0, top: L.VH, bottom: 0, background: BG, borderTop: '1px solid #26231f'}} />
           <Caption f={f} L={L} />
