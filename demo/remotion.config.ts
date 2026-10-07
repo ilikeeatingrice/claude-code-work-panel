@@ -7,5 +7,7 @@ const chrome = process.env.REMOTION_CHROME;
 if (chrome && fs.existsSync(chrome)) {
   Config.setBrowserExecutable(chrome);
 }
+// audio/track.wav is served as staticFile('track.wav').
+Config.setPublicDir('audio');
 Config.setVideoImageFormat('jpeg');
 Config.setJpegQuality(92);

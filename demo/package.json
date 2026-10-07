@@ -4,7 +4,10 @@
   "version": "1.0.0",
   "scripts": {
     "studio": "remotion studio src/index.ts",
-    "render": "remotion render src/index.ts WorkPanelDemo out/work-panel-demo.mp4 --codec=h264 --crf=18",
+    "render": "remotion render src/index.ts WorkPanelDemo out/work-panel-demo.mp4 --codec=h264 --crf=18 --audio-codec=aac --audio-bitrate=192k",
+    "render:4x5": "remotion render src/index.ts WorkPanelDemo4x5 out/work-panel-demo-4x5.mp4 --codec=h264 --crf=18 --audio-codec=aac --audio-bitrate=192k",
+    "audio": "${PYTHON:-python3} audio/make_track.py",
+    "sync": "esbuild scripts/sync-table.ts --bundle --platform=node --log-level=warning | node",
     "gif": "bash scripts/gif.sh",
     "stills": "bash scripts/stills.sh"
   },
