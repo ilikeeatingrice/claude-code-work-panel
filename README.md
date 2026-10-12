@@ -42,6 +42,23 @@ Python 3.10+ is needed for the tracker. No other dependencies.
 | `■` | Blocked: shows its resume condition | No |
 | `✓` | Done, folded into one `N done` line | No |
 
+### Batches
+
+Some tasks are safe to run at the same time: they touch different files and do not wait on each other. When the roadmap skill plans a roadmap, it puts those tasks in a named batch (`A`, `B`, ...) and lists the files each one expects to change. Older trackers leave both out, and the panel then draws every task on its own, as before.
+
+The panel draws a batch as a group under its roadmap:
+
+```
+  ⧉ batch A · 3 ready
+      ● .02 Coupon codes
+      ● .03 Gift cards
+      ● .04 Order emails
+```
+
+Pick the header (when 2 or more of its tasks can start) and press **Start batch A (.02 .03 .04)**. It starts them all in one fresh session, which uses the overseer skill to run them in parallel: it claims every task, gives each its own worker (in its own worktree when they would share a checkout), keeps each worker to that task's planned files, and verifies and hands off each task on its own. Tasks in the batch that can't start yet are left out, and the panel says which and why. The clear and handoff rules are the same as for a single task: **Start** in a fresh session, **Clear and start** (pressed twice) after other work, with a handoff note when the old session was in the same roadmap.
+
+While a session runs a batch, its header reads `▲ THIS SESSION · batch A` with one line per task, and other sessions see all of those tasks as being worked on now.
+
 ### What this session is doing
 
 Once a session has a task, the panel shows only that task's roadmap (the rest fold into one row) and a header:
@@ -93,7 +110,7 @@ In `/config` → Work Panel:
 | `startHint` | empty | Added to each first message, e.g. `Use the work-tracker skill.` |
 | `noteAuthor` | `@claude` | Author written on handoff notes. |
 
-A custom tracker command must print the same JSON as `python3 tracker/roadmap.py tree --json`: a list of roadmaps, each with `plan_id`, `state`, `parent_task_id`, `counts` and `tasks`; each task with `task_id`, `title`, `status`, `ready`, `waiting_on`, `open_children`, `resume_condition`, `last_comment_at` (UTC `YYYY-MM-DD HH:MM`) and `path`. The panel draws `ready`; it never computes it.
+A custom tracker command must print the same JSON as `python3 tracker/roadmap.py tree --json`: a list of roadmaps, each with `plan_id`, `state`, `parent_task_id`, `counts` and `tasks`; each task with `task_id`, `title`, `status`, `ready`, `waiting_on`, `open_children`, `resume_condition`, `last_comment_at` (UTC `YYYY-MM-DD HH:MM`) and `path`. The panel draws `ready`; it never computes it. Two optional keys turn on batches: `batch` (a name, or null) and `planned_files` (a list of paths); a tracker that omits them gets no batches.
 
 ## How it is built
 

@@ -26,6 +26,7 @@ def task_text(
     checked=False,
     extra_body="",
     block_lists=False,
+    extra_frontmatter="",
 ):
     labels = labels or []
     dependencies = dependencies or []
@@ -39,7 +40,8 @@ def task_text(
     mark = "x" if checked else " "
     return (
         f"---\nid: {task_id}\ntitle: {json.dumps(title)}\nstatus: {status}\nassignee: []\n"
-        f"{label_yaml}{dep_yaml}{parent_yaml}priority: {priority}\nordinal: {ordinal}\n---\n\n"
+        f"{label_yaml}{dep_yaml}{parent_yaml}priority: {priority}\nordinal: {ordinal}\n"
+        f"{extra_frontmatter}---\n\n"
         f"## Acceptance Criteria\n<!-- AC:BEGIN -->\n- [{mark}] #1 Works\n<!-- AC:END -->\n"
         f"## Comments\n<!-- COMMENTS:BEGIN -->\n{extra_body}<!-- COMMENTS:END -->\n"
     )
@@ -127,6 +129,114 @@ def test_ready_waiting_children_paused_sort_comments_counts_and_parent_excluded(
     assert by_id["WORK-001.04"]["last_comment_at"] == "2026-02-02 02:02"
     assert data[1]["tasks"][0]["ready"] is False
     assert alpha["counts"] == {"total": 6, "done": 1, "ready": 2, "in_progress": 0, "blocked": 1, "waiting": 2}
+
+
+@pytest.mark.parametrize("force_fallback", [False, True])
+def test_tree_json_emits_batch_and_planned_files_defaults(tmp_path, monkeypatch, force_fallback):
+    if force_fallback:
+        monkeypatch.setattr(roadmap, "_yaml", None)
+    setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/a.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "batched.md": task_text(
+                "WORK-001.01",
+                labels=["alpha"],
+                parent="WORK-001",
+                extra_frontmatter=(
+                    "batch: A-1\nplanned_files:\n"
+                    "  - src/cart/totals.py\n  - tests/cart/\n"
+                ),
+            ),
+            "plain.md": task_text("WORK-001.02", labels=["alpha"], parent="WORK-001"),
+        },
+    )
+    data = roadmap.tree_data(tmp_path)
+    by_id = {task["task_id"]: task for task in data[0]["tasks"]}
+    assert by_id["WORK-001.01"]["batch"] == "A-1"
+    assert by_id["WORK-001.01"]["planned_files"] == ["src/cart/totals.py", "tests/cart/"]
+    assert by_id["WORK-001.02"]["batch"] is None
+    assert by_id["WORK-001.02"]["planned_files"] == []
+    cli_data = json.loads(run_cli(tmp_path, "tree", "--json").stdout)
+    assert cli_data[0]["tasks"] == data[0]["tasks"]
+
+
+def test_validate_parallel_batch_rules_and_clean_batch(tmp_path):
+    root = setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/a.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "bad-batch.md": task_text(
+                "WORK-001.01", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: 'bad name'\n",
+            ),
+            "bad-files.md": task_text(
+                "WORK-001.02", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="planned_files: src/not-a-list.py\n",
+            ),
+            "dep-a.md": task_text(
+                "WORK-001.03", labels=["alpha"], dependencies=["WORK-001.04"],
+                parent="WORK-001", extra_frontmatter="batch: DEP\n",
+            ),
+            "dep-middle.md": task_text(
+                "WORK-001.04", labels=["alpha"], dependencies=["WORK-001.05"],
+                parent="WORK-001",
+            ),
+            "dep-c.md": task_text(
+                "WORK-001.05", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: DEP\n",
+            ),
+            "files-a.md": task_text(
+                "WORK-001.06", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: FILES\nplanned_files: [./src/cart/]\n",
+            ),
+            "files-b.md": task_text(
+                "WORK-001.07", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: FILES\nplanned_files: [src/cart/totals.py]\n",
+            ),
+            "clean-a.md": task_text(
+                "WORK-001.08", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: CLEAN\nplanned_files: [src/a.py]\n",
+            ),
+            "clean-b.md": task_text(
+                "WORK-001.09", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter="batch: CLEAN\nplanned_files: [src/b.py]\n",
+            ),
+        },
+    )
+    errors = roadmap.validation_errors(root)
+    assert any("invalid batch: WORK-001.01" in error for error in errors)
+    assert any("invalid planned_files: WORK-001.02" in error for error in errors)
+    assert any(
+        "batch DEP" in error and "WORK-001.03" in error and "WORK-001.05" in error
+        for error in errors
+    )
+    assert any(
+        "batch FILES" in error and "WORK-001.06" in error
+        and "WORK-001.07" in error and "src/cart/" in error
+        for error in errors
+    )
+    assert not any("batch CLEAN" in error for error in errors)
+
+    clean = tmp_path / "clean"
+    setup_repo(
+        clean,
+        plans=[(1, "alpha", "docs/a.md", "Active", "WORK-010")],
+        tasks={
+            "p.md": task_text("WORK-010", labels=["alpha"]),
+            "a.md": task_text(
+                "WORK-010.01", labels=["alpha"], parent="WORK-010",
+                extra_frontmatter="batch: A\nplanned_files: [src/a.py]\n",
+            ),
+            "b.md": task_text(
+                "WORK-010.02", labels=["alpha"], parent="WORK-010",
+                extra_frontmatter="batch: A\nplanned_files: [src/b.py]\n",
+            ),
+        },
+    )
+    assert roadmap.validation_errors(clean) == []
 
 
 def test_validate_clean_and_all_error_classes(tmp_path):
@@ -217,6 +327,64 @@ def test_create_dry_run_then_create_and_validate(tmp_path):
     assert roadmap.validation_errors(root) == []
     ready = [task["task_id"] for task in roadmap.tree_data(root)[0]["tasks"] if task["ready"]]
     assert ready == ["WORK-001.01"]
+
+
+@pytest.mark.parametrize(
+    "tasks,error",
+    [
+        (
+            [
+                {"key": "a", "title": "A", "depends_on": ["b"], "batch": "A"},
+                {"key": "b", "title": "B", "depends_on": [], "batch": "A"},
+            ],
+            "batch A tasks depend on each other",
+        ),
+        (
+            [
+                {"key": "a", "title": "A", "depends_on": [], "batch": "A", "files": ["src/cart/"]},
+                {
+                    "key": "b", "title": "B", "depends_on": [], "batch": "A",
+                    "files": ["./src/cart/totals.py"],
+                },
+            ],
+            "batch A planned files overlap",
+        ),
+    ],
+)
+def test_create_dry_run_rejects_batch_conflicts(tmp_path, tasks, error):
+    root = fresh_create_repo(tmp_path)
+    spec = create_spec(tmp_path, tasks=tasks)
+    with pytest.raises(roadmap.TrackerError, match=error):
+        roadmap.plan_create(root, spec, True)
+    assert list((root / "backlog" / "tasks").iterdir()) == []
+
+
+def test_create_writes_batch_fields_and_tree_round_trips(tmp_path):
+    root = fresh_create_repo(tmp_path)
+    tasks = [
+        {
+            "key": "totals", "title": "Cart totals", "depends_on": [],
+            "batch": "A", "files": ["src/cart/totals.py", "tests/cart/"],
+        },
+        {
+            "key": "coupons", "title": "Coupons", "depends_on": [],
+            "batch": "A", "files": ["src/cart/coupons.py"],
+        },
+    ]
+    spec = create_spec(tmp_path, tasks=tasks)
+    preview = roadmap.plan_create(root, spec, True)
+    assert preview[0]["batch"] is None and preview[0]["planned_files"] == []
+    assert preview[1]["batch"] == "A"
+    assert preview[1]["planned_files"] == ["src/cart/totals.py", "tests/cart/"]
+
+    roadmap.plan_create(root, spec, False)
+    tree = roadmap.tree_data(root)[0]["tasks"]
+    by_id = {task["task_id"]: task for task in tree}
+    assert by_id["WORK-001.01"]["batch"] == "A"
+    assert by_id["WORK-001.01"]["planned_files"] == ["src/cart/totals.py", "tests/cart/"]
+    written = Path(by_id["WORK-001.01"]["path"]).read_text()
+    assert 'batch: "A"\n' in written
+    assert "planned_files:\n" in written
 
 
 @pytest.mark.parametrize(

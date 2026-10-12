@@ -34,6 +34,12 @@ let armed: string | undefined
 let busy: string | undefined
 let problem: string | undefined
 let sessionTask: { id: string; plan: string } | undefined
+// When this session runs a batch (several tasks the plan marked safe to run at
+// the same time), all of its task ids; `sessionTask` stays the first of them,
+// so the code that only knows one task keeps working.
+let sessionBatch: { plan: string; name: string; ids: string[] } | undefined
+// The batch picked in the list (the way `selected` is the picked task).
+let selectedBatch: { plan: string; name: string } | undefined
 // This session's task when the tracker does not list it (a task file that no
 // longer parses, say): kept and shown with a warning instead of forgotten.
 let missingTask: string | undefined
@@ -105,9 +111,11 @@ async function readLive($: any): Promise<Map<string, LiveEntry>> {
           await $.process.run(['rm', '-f', `${liveDir}/${entry.name}`])
           continue
         }
-        if (!value.task || value.sessionId === sessionId) continue
+        // Every task of another session's batch counts as being worked on.
+        const ids = value.tasks?.length ? value.tasks : value.task ? [value.task] : []
+        if (!ids.length || value.sessionId === sessionId) continue
         if (now - value.at > LIVE_FRESH_MS) continue
-        map.set(value.task, value)
+        for (const id of ids) map.set(id, value)
       } catch {
         // a half-written file from another session: skip it this round
       }
@@ -123,6 +131,7 @@ async function beat($: any) {
   const value: LiveEntry = {
     sessionId,
     task: sessionTask?.id ?? missingTask ?? null,
+    tasks: sessionBatch ? sessionBatch.ids : sessionTask ? [sessionTask.id] : missingTask ? [missingTask] : [],
     now: nowText ?? null,
     nowAt,
     cwd: root,
@@ -147,6 +156,7 @@ async function restoreFromLive($: any) {
       return
     }
     sessionTask = { id: saved.task, plan: found.plan.plan_id }
+    if (saved.tasks && saved.tasks.length > 1) sessionBatch = batchFrom(saved.tasks)
     expanded.add(found.plan.plan_id)
     nowText = saved.now ?? undefined
     nowAt = saved.nowAt ?? 0
@@ -193,6 +203,40 @@ function findTask(id: string): { plan: TreePlan; task: TreeTask } | undefined {
   return undefined
 }
 
+// A batch from task ids: the ids that exist, in the plan of the first one,
+// need to be 2 or more. The name is the tasks' shared `batch`, else 'batch'.
+function batchFrom(ids: string[]): { plan: string; name: string; ids: string[] } | undefined {
+  const found = [...new Set(ids)].map(findTask).filter((one): one is { plan: TreePlan; task: TreeTask } => one !== undefined)
+  const planId = found[0]?.plan.plan_id
+  const same = found.filter(one => one.plan.plan_id === planId)
+  if (!planId || same.length < 2) return undefined
+  const names = new Set(same.map(one => one.task.batch || ''))
+  const only = names.size === 1 ? [...names][0] : ''
+  return { plan: planId, name: only || 'batch', ids: same.map(one => one.task.task_id) }
+}
+
+// The open tasks of one batch in a plan, split into what a press would start
+// and what it would leave out (with the reason).
+function batchState(members: TreeTask[], now: number) {
+  const ready: TreeTask[] = []
+  const guards: { task: TreeTask; guard: string }[] = []
+  const left: { task: TreeTask; why: string }[] = []
+  for (const task of members) {
+    const s = startability(task, now)
+    if (s.canStart) {
+      ready.push(task)
+      if (s.guard) guards.push({ task, guard: s.guard })
+    } else {
+      left.push({ task, why: s.why ?? 'not ready' })
+    }
+  }
+  return { ready, guards, left }
+}
+
+function openBatchMembers(plan: TreePlan, name: string): TreeTask[] {
+  return plan.tasks.filter(task => task.batch === name && task.status !== 'Done' && !task.completed)
+}
+
 function lastCommentMs(task: TreeTask): number | undefined {
   if (!task.last_comment_at) return undefined
   const ms = Date.parse(`${task.last_comment_at.trim().replace(' ', 'T')}Z`)
@@ -202,7 +246,7 @@ function lastCommentMs(task: TreeTask): number | undefined {
 // Can this task be started from the panel, and does it need a second press?
 function startability(task: TreeTask, now: number): { canStart: boolean; why?: string; guard?: string } {
   if (task.completed || task.status === 'Done') return { canStart: false, why: 'done' }
-  if (sessionTask?.id === task.task_id) return { canStart: false, why: 'this session' }
+  if (sessionTask?.id === task.task_id || sessionBatch?.ids.includes(task.task_id)) return { canStart: false, why: 'this session' }
   if (task.status === 'Blocked') return { canStart: false, why: task.resume_condition ? `blocked · ${task.resume_condition}` : 'blocked' }
   if (task.status === 'In Progress') {
     const holder = live.get(task.task_id)
@@ -286,70 +330,127 @@ async function gitFacts($: any): Promise<string> {
   }
 }
 
-function firstMessage(plan: TreePlan, task: TreeTask, note?: { from: string; text: string }): string {
+type Note = { from: string; text: string }
+
+const takeoverLine = (task: TreeTask) =>
+  `${task.task_id} is already In Progress${task.assignees.length ? ` (assignee ${task.assignees.join(', ')})` : ''}, but no live session is working on it. Read its latest comment first, take over the claim, and record the takeover in its journal.`
+
+function noteLines(note: Note): string[] {
+  return [
+    '',
+    `This continues the same roadmap. The previous session just handed off ${note.from}; its full note is the latest comment on ${note.from}. Read it before you start. The note:`,
+    '',
+    note.text.trim(),
+  ]
+}
+
+function firstMessage(plan: TreePlan, task: TreeTask, note?: Note): string {
   const lines = [
     `Start ${task.task_id} (${task.title}). Roadmap: ${plan.plan_id} (${plan.parent_task_id}).${startHint ? ` ${startHint}` : ''}`,
   ]
-  if (task.status === 'In Progress') {
-    lines.push(
-      `${task.task_id} is already In Progress${task.assignees.length ? ` (assignee ${task.assignees.join(', ')})` : ''}, but no live session is working on it. Read its latest comment first, take over the claim, and record the takeover in its journal.`,
-    )
-  }
-  if (note) {
-    lines.push(
-      '',
-      `This continues the same roadmap. The previous session just handed off ${note.from}; its full note is the latest comment on ${note.from}. Read it before you start. The note:`,
-      '',
-      note.text.trim(),
-    )
-  }
+  if (task.status === 'In Progress') lines.push(takeoverLine(task))
+  if (note) lines.push(...noteLines(note))
   return lines.join('\n')
+}
+
+function batchMessage(plan: TreePlan, name: string, members: TreeTask[], note?: Note): string {
+  const list = members.map(task => `${task.task_id} (${task.title})`).join(', ')
+  const lines = [
+    `Start batch ${name} of roadmap ${plan.plan_id} (${plan.parent_task_id}): ${list}.`,
+    `The plan marked these tasks safe to run at the same time. Use the overseer skill to run them in parallel: claim every task first, give each task its own worker (in its own worktree when they would share a checkout), keep each worker to that task's planned files, then verify and hand off each task on its own.${startHint ? ` ${startHint}` : ''}`,
+  ]
+  for (const task of members) {
+    if (task.status === 'In Progress') lines.push(takeoverLine(task))
+  }
+  const files = members.filter(task => task.planned_files?.length)
+  if (files.length) {
+    lines.push(`Planned files — ${files.map(task => `${shortId(task.task_id)}: ${task.planned_files!.join(', ')}`).join('; ')}`)
+  }
+  if (note) lines.push(...noteLines(note))
+  return lines.join('\n')
+}
+
+// The shared first half of a start: when the session is in the same roadmap,
+// its model writes the handoff note (saved on the task it was on); then
+// /clear, unless the session is fresh. Returns the note, if one was written.
+async function handOff($: any, which: Case): Promise<Note | undefined> {
+  let note: Note | undefined
+  if (which === 'same' && sessionTask) {
+    const from = findTask(sessionTask.id)
+    busy = `writing the handoff note on ${sessionTask.id}…`
+    $.ui.invalidate('ui.render')
+    const reply = await $.model.fork({ prompt: NOTE_PROMPT })
+    if (!reply.isAnswered || !reply.text?.trim()) {
+      throw new Error(`the note could not be written (${reply.reason ?? 'empty reply'}); nothing was cleared`)
+    }
+    const text = `${reply.text.trim()}\n${await gitFacts($)}`
+    if (from) await appendComment($, from.task.path, text)
+    note = { from: sessionTask.id, text }
+  }
+  if (which !== 'start') {
+    busy = 'clearing…'
+    $.ui.invalidate('ui.render')
+    await $.command.run({ command: 'clear' })
+    sessionId = await $.session.id()
+  }
+  return note
+}
+
+// Hand off, clear, take the task(s) as this session's, and send the first
+// message. `batchName` is set when `ids` is a batch.
+async function launch(
+  $: any,
+  plan: TreePlan,
+  which: Case,
+  ids: string[],
+  batchName: string | undefined,
+  message: (note?: Note) => string,
+) {
+  problem = undefined
+  armed = undefined
+  try {
+    const note = await handOff($, which)
+    sessionTask = { id: ids[0]!, plan: plan.plan_id }
+    sessionBatch = batchName ? { plan: plan.plan_id, name: batchName, ids } : undefined
+    missingTask = undefined
+    nowText = batchName ? 'starting batch' : 'starting'
+    nowAt = await $.clock.now()
+    expanded.add(plan.plan_id)
+    showOthers = false
+    selected = undefined
+    selectedBatch = undefined
+    busy = undefined
+    isFresh = false
+    await beat($)
+    $.ui.invalidate('ui.render')
+    await $.prompt.submit({ text: message(note) })
+  } catch (err) {
+    busy = undefined
+    problem = String((err as Error)?.message ?? err)
+    $.ui.invalidate('ui.render')
+  }
 }
 
 async function start($: any, planId: string, taskId: string) {
   const found = findTask(taskId)
   if (!found || found.plan.plan_id !== planId) return
   const { plan, task } = found
-  const which = caseFor(plan)
+  await launch($, plan, caseFor(plan), [task.task_id], undefined, note => firstMessage(plan, task, note))
+}
+
+async function startBatch($: any, planId: string, name: string) {
   problem = undefined
   armed = undefined
-  try {
-    let note: { from: string; text: string } | undefined
-    if (which === 'same' && sessionTask) {
-      const from = findTask(sessionTask.id)
-      busy = `writing the handoff note on ${sessionTask.id}…`
-      $.ui.invalidate('ui.render')
-      const reply = await $.model.fork({ prompt: NOTE_PROMPT })
-      if (!reply.isAnswered || !reply.text?.trim()) {
-        throw new Error(`the note could not be written (${reply.reason ?? 'empty reply'}); nothing was cleared`)
-      }
-      const text = `${reply.text.trim()}\n${await gitFacts($)}`
-      if (from) await appendComment($, from.task.path, text)
-      note = { from: sessionTask.id, text }
-    }
-    if (which !== 'start') {
-      busy = 'clearing…'
-      $.ui.invalidate('ui.render')
-      await $.command.run({ command: 'clear' })
-      sessionId = await $.session.id()
-    }
-    sessionTask = { id: task.task_id, plan: plan.plan_id }
-    missingTask = undefined
-    nowText = 'starting'
-    nowAt = await $.clock.now()
-    expanded.add(plan.plan_id)
-    showOthers = false
-    selected = undefined
-    busy = undefined
-    isFresh = false
-    await beat($)
+  // The list may have moved since the press that armed this: read it again.
+  await refresh($)
+  const plan = plans.find(one => one.plan_id === planId)
+  const members = plan ? batchState(openBatchMembers(plan, name), await $.clock.now()).ready : []
+  if (!plan || members.length < 2) {
+    problem = `Batch ${name} no longer has 2 tasks ready to start; nothing was cleared.`
     $.ui.invalidate('ui.render')
-    await $.prompt.submit({ text: firstMessage(plan, task, note) })
-  } catch (err) {
-    busy = undefined
-    problem = String((err as Error)?.message ?? err)
-    $.ui.invalidate('ui.render')
+    return
   }
+  await launch($, plan, caseFor(plan), members.map(task => task.task_id), name, note => batchMessage(plan, name, members, note))
 }
 
 // ---------- hooks ----------
@@ -388,11 +489,16 @@ const FOCUS_TOOL = 'mcp__work-panel__focus'
 const FOCUS_SPEC = {
   name: 'focus',
   description:
-    "Tell the Work Panel (the task list beside this conversation) which tracked task this session is working on and what you are doing right now. Call it when you claim or switch to a task, at each milestone (a new step, tests running, waiting on the person), and with done: true when the task is finished. Keep `now` to a short phrase, e.g. 'writing tests for coupon rules'. It only updates the panel; it changes no files.",
+    "Tell the Work Panel (the task list beside this conversation) which tracked task this session is working on and what you are doing right now. Call it when you claim or switch to a task, at each milestone (a new step, tests running, waiting on the person), and with done: true when the task is finished. Keep `now` to a short phrase, e.g. 'writing tests for coupon rules'. When you run a batch of tasks together, pass every task id in task_ids. It only updates the panel; it changes no files.",
   inputSchema: {
     type: 'object',
     properties: {
       task_id: { type: 'string', description: 'The tracked task id, e.g. TASK-001.02' },
+      task_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Every task id this session is working on, when it runs a batch',
+      },
       now: { type: 'string', description: 'What you are doing right now, a short phrase (under 60 characters)' },
       done: { type: 'boolean', description: 'True when the task is finished' },
     },
@@ -466,6 +572,7 @@ export const register: Register = (on, options) => {
     }
     if (e.reason === 'clear') {
       sessionTask = undefined
+      sessionBatch = undefined
       missingTask = undefined
       nowText = undefined
       askedModel = false
@@ -504,27 +611,42 @@ export const register: Register = (on, options) => {
 
   // The agent reports its task and what it is doing now; the panel shows it.
   on('tool.call', { tool: FOCUS_TOOL }, async ($, e) => {
-    const input = e as unknown as { task_id?: string; now?: string; done?: boolean }
+    const input = e as unknown as { task_id?: string; task_ids?: unknown; now?: string; done?: boolean }
     const id = String(input.task_id ?? '').trim().toUpperCase()
+    const given = Array.isArray(input.task_ids)
+      ? input.task_ids.map(one => String(one).trim().toUpperCase()).filter(Boolean)
+      : []
     let found = findTask(id)
-    if (!found) {
+    if (!found || given.some(one => !findTask(one))) {
       await refresh($)
       found = findTask(id)
     }
     if (!found) return { result: `Work Panel: no task ${id} in this folder's tracker; nothing changed.` }
-    if (sessionTask?.id !== id) {
+    const batch = given.length ? batchFrom([id, ...given]) : undefined
+    // A single task of the current batch keeps the batch and only moves the
+    // now text; any other task replaces the batch.
+    const keeps = !batch && sessionBatch?.ids.includes(id) === true
+    const sameBatch = batch !== undefined && sessionBatch?.ids.join() === batch.ids.join()
+    if (!keeps && (batch ? !sameBatch : sessionTask?.id !== id)) {
       expanded.add(found.plan.plan_id)
       showOthers = false
       selected = undefined
+      selectedBatch = undefined
       armed = undefined
     }
-    sessionTask = { id, plan: found.plan.plan_id }
+    if (!keeps) {
+      sessionTask = { id, plan: found.plan.plan_id }
+      sessionBatch = batch
+    }
     missingTask = undefined
-    nowText = input.done ? 'done' : String(input.now ?? '').trim().slice(0, 80) || undefined
+    // One member finishing is not the batch finishing: name which one.
+    const doneText = keeps ? `${shortId(id)} done` : 'done'
+    nowText = input.done ? doneText : String(input.now ?? '').trim().slice(0, 80) || undefined
     nowAt = await $.clock.now()
     await beat($)
     $.ui.invalidate('ui.render')
-    return { result: `Work Panel shows this session on ${id}${nowText ? ` (now: ${nowText})` : ''}.` }
+    const where = sessionBatch ? `batch ${sessionBatch.name} (${sessionBatch.ids.join(', ')})` : id
+    return { result: `Work Panel shows this session on ${where}${nowText ? ` (now: ${nowText})` : ''}.` }
   }).catch(() => ({ result: 'Work Panel could not update; carry on with the task.' }))
 
   // This session's task follows its claims as they happen: after a tool call
@@ -550,12 +672,16 @@ export const register: Register = (on, options) => {
     await refresh($)
     for (const id of before) {
       const found = findTask(id)
+      // A claim inside this session's own batch is the batch working, not a switch.
+      if (sessionBatch?.ids.includes(id)) continue
       if (found && found.task.status === 'In Progress' && sessionTask?.id !== id) {
         sessionTask = { id, plan: found.plan.plan_id }
+        sessionBatch = undefined
         missingTask = undefined
         expanded.add(found.plan.plan_id)
         showOthers = false
         selected = undefined
+        selectedBatch = undefined
         armed = undefined
         await beat($)
         $.ui.invalidate('ui.render')
@@ -639,7 +765,8 @@ export const register: Register = (on, options) => {
         return 2
       }
       const sorted = [...open].sort((a, b) => order(a) - order(b))
-      for (const task of sorted) {
+      // One task's row (and its why line); batch members sit two columns deeper.
+      const pushTask = (task: TreeTask, indent: number) => {
         const s = startability(task, now)
         const mark =
           task.status === 'In Progress' ? '◐' : task.status === 'Blocked' ? '■' : s.canStart ? '●' : '○'
@@ -647,7 +774,7 @@ export const register: Register = (on, options) => {
         // A task someone is on right now is drawn in teal; this session's own, bold.
         const isMine = s.why === 'this session'
         const working = isMine || s.why === 'being worked on now'
-        const label = `  ${isPicked ? '▶' : mark} ${shortId(task.task_id).padEnd(4)} ${cut(task.title, width - 12)}`
+        const label = `${' '.repeat(indent)}${isPicked ? '▶' : mark} ${shortId(task.task_id).padEnd(4)} ${cut(task.title, width - 10 - indent)}`
         rows.push(
           s.canStart ? (
             <Button
@@ -657,6 +784,7 @@ export const register: Register = (on, options) => {
               label={label}
               onPress={() => {
                 selected = task.task_id
+                selectedBatch = undefined
                 armed = undefined
                 problem = undefined
                 $.ui.invalidate('ui.render')
@@ -677,10 +805,55 @@ export const register: Register = (on, options) => {
         if (s.why) {
           rows.push(
             <Text key={`w-${task.task_id}`} dimColor={!isMine} color={working ? TEAL : undefined} wrap="truncate-end">
-              {`         ${cut(s.why, width - 10)}`}
+              {`${' '.repeat(indent + 7)}${cut(s.why, width - 8 - indent)}`}
             </Text>,
           )
         }
+      }
+      // A batch is drawn at the place of its best-sorted member: a header, then
+      // its members. Tasks without a batch are drawn as they always were.
+      const drawn = new Set<string>()
+      for (const task of sorted) {
+        const bname = task.batch || undefined
+        if (!bname) {
+          pushTask(task, 2)
+          continue
+        }
+        if (drawn.has(bname)) continue
+        drawn.add(bname)
+        const members = sorted.filter(one => one.batch === bname)
+        const ready = batchState(members, now).ready.length
+        const isMineBatch = sessionBatch?.plan === plan.plan_id && sessionBatch.name === bname
+        const isPickedBatch = selectedBatch?.plan === plan.plan_id && selectedBatch.name === bname
+        const header = isMineBatch
+          ? `  ⧉ batch ${bname} · this session`
+          : `  ${isPickedBatch ? '▶' : '⧉'} batch ${bname} · ${ready} ready`
+        rows.push(
+          !isMineBatch && ready >= 2 ? (
+            <Button
+              key={`b-${plan.plan_id}-${bname}`}
+              plain
+              label={cut(header, width)}
+              onPress={() => {
+                selectedBatch = { plan: plan.plan_id, name: bname }
+                selected = undefined
+                armed = undefined
+                problem = undefined
+                $.ui.invalidate('ui.render')
+              }}
+            />
+          ) : (
+            <Text
+              key={`b-${plan.plan_id}-${bname}`}
+              dimColor={!isMineBatch}
+              color={isMineBatch ? TEAL : undefined}
+              wrap="truncate-end"
+            >
+              {cut(header, width)}
+            </Text>
+          ),
+        )
+        for (const member of members) pushTask(member, 4)
       }
       if (doneCount) rows.push(<Text key={`d-${plan.plan_id}`} dimColor>{`  ✓ ${doneCount} done`}</Text>)
     }
@@ -699,9 +872,63 @@ export const register: Register = (on, options) => {
       )
     }
 
+    const hintFor = (which: Case) =>
+      which === 'same'
+        ? `Same roadmap: a handoff note goes on ${sessionTask?.id} first.`
+        : which === 'other'
+          ? 'No handoff note: different roadmap or no task here.'
+          : 'Fresh session: nothing to clear.'
+
+    // The picked batch counts only while 2 of its members can still start.
+    const pickedBatchPlan = selectedBatch ? plans.find(plan => plan.plan_id === selectedBatch?.plan) : undefined
+    const pickedBatchState =
+      pickedBatchPlan && selectedBatch ? batchState(openBatchMembers(pickedBatchPlan, selectedBatch.name), now) : undefined
+
     let action: any = null
     if (busy) {
       action = <Text color={TEAL}>{busy}</Text>
+    } else if (pickedBatchPlan && selectedBatch && pickedBatchState && pickedBatchState.ready.length >= 2) {
+      const bplan = pickedBatchPlan
+      const bname = selectedBatch.name
+      const { ready, guards, left } = pickedBatchState
+      const which = caseFor(bplan)
+      const ids = ready.map(task => shortId(task.task_id)).join(' ')
+      const verb = which === 'start' ? 'Start' : 'Clear and start'
+      const needsConfirm = which !== 'start' || guards.length > 0
+      const key = `batch:${bplan.plan_id}:${bname}`
+      const isArmed = armed === key
+      action = (
+        <Box flexDirection="column">
+          {guards.map(one => (
+            <Text key={`g-${one.task.task_id}`} color={AMBER} wrap="wrap">{`Careful: ${shortId(one.task.task_id)} ${one.guard}.`}</Text>
+          ))}
+          <Button
+            key="go-batch"
+            variant="primary"
+            autoFocus
+            label={isArmed ? `Press again: ${verb.toLowerCase()} batch ${bname} (${ids})` : `${verb} batch ${bname} (${ids})`}
+            onPress={() => {
+              if (isTurnRunning) {
+                problem = 'Wait for the current turn to finish.'
+                $.ui.invalidate('ui.render')
+                return
+              }
+              if (needsConfirm && !isArmed) {
+                armed = key
+                $.ui.invalidate('ui.render')
+                return
+              }
+              const planId = bplan.plan_id
+              $.clock.after(50, () => void startBatch($, planId, bname))
+            }}
+          />
+          <Text dimColor wrap="wrap">{hintFor(which)}</Text>
+          {left.length ? (
+            <Text dimColor wrap="wrap">{`Leaves out ${left.map(one => `${shortId(one.task.task_id)} (${one.why})`).join(', ')}`}</Text>
+          ) : null}
+          <Text dimColor wrap="wrap">Runs in one session; overseer runs them in parallel.</Text>
+        </Box>
+      )
     } else if (pickedRow) {
       const which = caseFor(pickedRow.plan)
       const s = startability(pickedRow.task, now)
@@ -709,12 +936,7 @@ export const register: Register = (on, options) => {
       const verb = which === 'start' ? 'Start' : 'Clear and start'
       const needsConfirm = which !== 'start' || Boolean(s.guard)
       const isArmed = armed === pickedRow.task.task_id
-      const hint =
-        which === 'same'
-          ? `Same roadmap: a handoff note goes on ${sessionTask?.id} first.`
-          : which === 'other'
-            ? 'No handoff note: different roadmap or no task here.'
-            : 'Fresh session: nothing to clear.'
+      const hint = hintFor(which)
       action = (
         <Box flexDirection="column">
           {s.guard ? <Text color={AMBER} wrap="wrap">{`Careful: ${s.guard}.`}</Text> : null}
@@ -755,9 +977,21 @@ export const register: Register = (on, options) => {
         {current ? (
           <Box flexDirection="column">
             <Text color={AMBER}>
-              {current.task.status === 'Done' || current.task.completed ? '▲ THIS SESSION · done' : '▲ THIS SESSION'}
+              {sessionBatch && sessionBatch.ids.length >= 2
+                ? `▲ THIS SESSION · batch ${sessionBatch.name}`
+                : current.task.status === 'Done' || current.task.completed
+                  ? '▲ THIS SESSION · done'
+                  : '▲ THIS SESSION'}
             </Text>
-            <Text>{cut(`${current.task.task_id} · ${current.task.title}`, width)}</Text>
+            {sessionBatch && sessionBatch.ids.length >= 2 ? (
+              sessionBatch.ids.map(id => {
+                const member = findTask(id)?.task
+                const isDone = member?.status === 'Done' || member?.completed
+                return <Text key={`m-${id}`}>{cut(`${isDone ? '✓' : '◐'} ${shortId(id)} ${member?.title ?? "(not in the tracker's list)"}`, width)}</Text>
+              })
+            ) : (
+              <Text>{cut(`${current.task.task_id} · ${current.task.title}`, width)}</Text>
+            )}
             {nowText ? <Text dimColor>{cut(nowLine(nowText, now - nowAt), width)}</Text> : null}
           </Box>
         ) : lostId ? (

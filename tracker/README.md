@@ -19,6 +19,29 @@ plan ID. `backlog.config.yml` may set `task_prefix`, `backlog_directory`, and
 `zero_padded_ids`. PyYAML is used when installed; the bundled parser handles the
 supported flat frontmatter format otherwise.
 
+### Parallel batches
+
+Tasks that are safe to run at the same time may share a plan-scoped `batch` name
+(beginning with a letter or digit, then letters, digits, or hyphens). Their optional
+`planned_files` list records expected file or directory changes; directory paths end
+in `/`.
+
+```yaml
+batch: A
+planned_files:
+  - src/cart/totals.py
+  - tests/cart/
+```
+
+Every task in `tree --json` includes `batch` (a string or `null`) and
+`planned_files` (a list, empty when omitted). `validate` rejects malformed values,
+dependencies between members of the same plan and batch (including transitive
+dependencies), and overlapping planned paths. Equal paths overlap after removing a
+leading `./`; a directory also overlaps every path beneath it.
+
+In a `create --spec` task, use `"batch": "A"` and `"files": ["path", ...]`.
+Dry runs validate batch dependencies and file overlaps before anything is written.
+
 ## Commands
 
 ```text
@@ -32,5 +55,6 @@ python3 tracker/roadmap.py comment TASK_ID (--text TEXT | --file FILE) [--author
 python3 tracker/roadmap.py status TASK_ID --set STATUS [--assignee @name]
 ```
 
-`create --dry-run --json` previews IDs, dependency mapping, and destination paths
-without writing. `validate` prints `OK` on success and exits 1 for structural errors.
+`create --dry-run --json` previews IDs, dependency mapping, batch, planned files,
+and destination paths without writing. `validate` prints `OK` on success and exits
+1 for structural errors.

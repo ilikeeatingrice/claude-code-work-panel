@@ -18,6 +18,11 @@ export type TreeTask = {
   last_comment_at: string | null
   completed: boolean
   path: string
+  // Optional: older trackers omit both. A named group of tasks in one plan that
+  // the plan marked safe to run at the same time, and the files a task expects
+  // to change. Missing means null / [].
+  batch?: string | null
+  planned_files?: string[]
 }
 
 export type TreePlan = {
@@ -33,7 +38,9 @@ export type TreePlan = {
 
 export type LiveEntry = {
   sessionId: string
+  // The first task id; `tasks` lists every task when the session runs a batch.
   task: string | null
+  tasks?: string[]
   now?: string | null
   nowAt?: number
   cwd: string

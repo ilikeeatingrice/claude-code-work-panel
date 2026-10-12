@@ -32,18 +32,21 @@ CREATE_SPEC_HELP = """spec shape:
     "tasks": [
       {"key": "totals", "title": "Cart totals in one place",
        "description": "...", "acceptance": ["observable criterion", "..."],
-       "depends_on": [], "priority": "p1"},
+       "depends_on": [], "priority": "p1", "batch": "A",
+       "files": ["src/cart/totals.py", "tests/cart/"]},
       {"key": "coupons", "title": "Coupon codes",
        "acceptance": ["..."], "depends_on": ["totals"]}
     ]
   }
 depends_on names spec keys or existing task ids. --dry-run writes nothing and
-prints the ids, titles, dependencies and paths it would create."""
+prints the ids, titles, dependencies and paths it would create. A batch groups
+tasks safe to run together: no dependencies, overlapping files, or shared test resources."""
 BEGIN = "<!-- ACTIVE_PLANS:BEGIN -->"
 END = "<!-- ACTIVE_PLANS:END -->"
 COMMENTS_END = "<!-- COMMENTS:END -->"
 ID_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*)-(\d+)(?:\.(\d+))?$")
 PLAN_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+BATCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 REGISTRY_RE = re.compile(
     r"^\s*\|\s*(\d+)\s*\|\s*\[([^]]+)\]\(([^)]+)\)\s*\|\s*"
     r"(Active|Paused)\s*\|\s*([^|]+?)\s*\|\s*$"
@@ -213,11 +216,25 @@ def load_tasks(root: Path) -> list[dict[str, Any]]:
                         meta.get("parent_task_id", meta.get("parent_task", meta.get("parent")))
                     ),
                     "dependencies": as_list(meta.get("dependencies", meta.get("depends_on"))),
+                    "batch": (
+                        meta.get("batch")
+                        if isinstance(meta.get("batch"), str) and meta.get("batch")
+                        else None
+                    ),
+                    "planned_files": (
+                        [item for item in meta.get("planned_files", []) if isinstance(item, str)]
+                        if isinstance(meta.get("planned_files", []), list)
+                        else []
+                    ),
                     "resume_condition": resume if str(meta.get("status") or "") == "Blocked" else None,
                     "last_comment_at": last_comment_at,
                     "completed": completed,
                     "path": str(path.resolve()),
                     "_body": body,
+                    "_batch_present": "batch" in meta,
+                    "_batch_value": meta.get("batch"),
+                    "_planned_files_present": "planned_files" in meta,
+                    "_planned_files_value": meta.get("planned_files"),
                 }
             )
     return found
@@ -255,7 +272,7 @@ def public_task(task: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "task_id", "title", "status", "priority", "ordinal", "assignees", "labels",
         "parent_task_id", "dependencies", "ready", "waiting_on", "open_children",
-        "resume_condition", "last_comment_at", "completed", "path",
+        "batch", "planned_files", "resume_condition", "last_comment_at", "completed", "path",
     )
     return {key: task[key] for key in keys}
 
@@ -309,6 +326,64 @@ def acceptance_unchecked(task: dict[str, Any]) -> bool:
     return bool(re.search(r"(?mi)^\s*-\s*\[\s\]\s*", body))
 
 
+def normalized_planned_path(path: str) -> str:
+    return path[2:] if path.startswith("./") else path
+
+
+def overlapping_path(left: list[str], right: list[str]) -> str | None:
+    """Return the first deterministic overlap between two planned-file lists."""
+    for left_raw in sorted(left):
+        left_path = normalized_planned_path(left_raw)
+        for right_raw in sorted(right):
+            right_path = normalized_planned_path(right_raw)
+            if (
+                left_path == right_path
+                or (left_path.endswith("/") and right_path.startswith(left_path))
+                or (right_path.endswith("/") and left_path.startswith(right_path))
+            ):
+                return left_path if len(left_path) <= len(right_path) else right_path
+    return None
+
+
+def reachable(graph: dict[str, list[str]], start: str, target: str) -> bool:
+    frontier = list(graph.get(start, []))
+    visited: set[str] = set()
+    while frontier:
+        node = frontier.pop()
+        if node == target:
+            return True
+        if node in visited:
+            continue
+        visited.add(node)
+        frontier.extend(graph.get(node, []))
+    return False
+
+
+def batch_conflict_errors(
+    groups: dict[tuple[str, str], list[dict[str, Any]]],
+    graph: dict[str, list[str]],
+) -> list[str]:
+    errors: list[str] = []
+    for (_, batch), members in sorted(groups.items()):
+        ordered = sorted(members, key=lambda task: task["task_id"])
+        for index, left in enumerate(ordered):
+            for right in ordered[index + 1 :]:
+                if reachable(graph, left["task_id"], right["task_id"]) or reachable(
+                    graph, right["task_id"], left["task_id"]
+                ):
+                    errors.append(
+                        f"batch {batch} tasks depend on each other: "
+                        f"{left['task_id']} and {right['task_id']}"
+                    )
+                overlap = overlapping_path(left["planned_files"], right["planned_files"])
+                if overlap is not None:
+                    errors.append(
+                        f"batch {batch} planned files overlap: "
+                        f"{left['task_id']} and {right['task_id']} at {overlap}"
+                    )
+    return errors
+
+
 def validation_errors(root: Path) -> list[str]:
     plans = registry(root)
     tasks = load_tasks(root)
@@ -323,6 +398,17 @@ def validation_errors(root: Path) -> list[str]:
             errors.append(f"registry parent missing: {plan['plan_id']} -> {plan['parent_task_id']}")
     for task in tasks:
         task_id = task["task_id"]
+        raw_batch = task["_batch_value"]
+        if task["_batch_present"] and (
+            not isinstance(raw_batch, str) or not BATCH_RE.fullmatch(raw_batch)
+        ):
+            errors.append(f"invalid batch: {task_id}: {raw_batch!r}")
+        raw_files = task["_planned_files_value"]
+        if task["_planned_files_present"] and (
+            not isinstance(raw_files, list)
+            or any(not isinstance(path, str) or not path for path in raw_files)
+        ):
+            errors.append(f"invalid planned_files: {task_id}")
         if task["status"] not in STATUSES:
             errors.append(f"unknown status: {task_id}: {task['status']}")
         parent = task["parent_task_id"]
@@ -359,6 +445,15 @@ def validation_errors(root: Path) -> list[str]:
 
     for node in graph:
         visit(node, [node])
+
+    plan_ids = {plan["plan_id"] for plan in plans}
+    batch_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for task in tasks:
+        if task["batch"] is None or not BATCH_RE.fullmatch(task["batch"]):
+            continue
+        for plan_id in sorted(plan_ids.intersection(task["labels"])):
+            batch_groups.setdefault((plan_id, task["batch"]), []).append(task)
+    errors.extend(batch_conflict_errors(batch_groups, graph))
 
     for plan in plans:
         if plan["state"] != "Active" or plan["parent_task_id"] not in by_id:
@@ -400,6 +495,15 @@ def render_task(task: dict[str, Any], width: int, created: str, plan_id: str, pl
         lines.append(f"parent_task_id: {parent}")
     if priority:
         lines.append(f"priority: {str(priority).lower()}")
+    if task.get("batch") is not None:
+        lines.append(f"batch: {json.dumps(task['batch'])}")
+    if task.get("files_given"):
+        files = task.get("planned_files", [])
+        if files:
+            lines.append("planned_files:")
+            lines.extend(f"  - {json.dumps(path, ensure_ascii=False)}" for path in files)
+        else:
+            lines.append("planned_files: []")
     lines.extend([f"ordinal: {task['ordinal']}", "---", "", "## Description", "", "<!-- SECTION:DESCRIPTION:BEGIN -->"])
     if description:
         lines.append(description)
@@ -469,10 +573,19 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
                 raise TrackerError(f"unknown dependency: {item['key']} -> {dep}")
             if dep in key_ids:
                 mapped.append(key_ids[dep])
-            elif isinstance(dep, str) and dep in existing_ids:
+            elif dep in existing_ids:
                 mapped.append(dep)
             else:
                 raise TrackerError(f"unknown dependency: {item['key']} -> {dep}")
+        batch = item.get("batch")
+        if "batch" in item and (not isinstance(batch, str) or not BATCH_RE.fullmatch(batch)):
+            raise TrackerError(f"invalid batch for task {item['key']}: {batch!r}")
+        files = item.get("files", [])
+        if "files" in item and (
+            not isinstance(files, list)
+            or any(not isinstance(path, str) or not path for path in files)
+        ):
+            raise TrackerError(f"files must be a list of non-empty strings: {item['key']}")
         graph[item["key"]] = [dep for dep in raw_deps if dep in key_ids]
         prepared_children.append(
             {
@@ -480,6 +593,7 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
                 "acceptance": as_list(item.get("acceptance")), "dependencies": mapped,
                 "priority": str(item.get("priority") or spec.get("priority") or "p1").lower(),
                 "ordinal": 1000 * index, "parent": base_id,
+                "batch": batch, "planned_files": files, "files_given": "files" in item,
             }
         )
     visiting: set[str] = set()
@@ -498,6 +612,19 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
 
     for key in graph:
         check_cycle(key)
+    spec_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for task in prepared_children:
+        if task["batch"] is not None:
+            spec_groups.setdefault((plan_id, task["batch"]), []).append(
+                {
+                    "task_id": task["id"],
+                    "planned_files": task["planned_files"],
+                }
+            )
+    id_graph = {key_ids[key]: [key_ids[dep] for dep in deps] for key, deps in graph.items()}
+    conflicts = batch_conflict_errors(spec_groups, id_graph)
+    if conflicts:
+        raise TrackerError(conflicts[0])
     parent = {
         "id": base_id, "title": str(spec.get("title") or plan_id), "description": str(spec.get("description") or ""),
         "acceptance": [], "dependencies": [], "priority": str(spec.get("priority") or "p1").lower(), "ordinal": 1000,
@@ -509,7 +636,13 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
         destination = out_dir / f"{task['id'].lower()} - {safe_title(task['title'])}.md"
         if destination.exists():
             raise TrackerError(f"refusing to overwrite: {destination}")
-        preview.append({"task_id": task["id"], "title": task["title"], "dependencies": task["dependencies"], "path": str(destination.resolve())})
+        preview.append(
+            {
+                "task_id": task["id"], "title": task["title"],
+                "dependencies": task["dependencies"], "path": str(destination.resolve()),
+                "batch": task.get("batch"), "planned_files": task.get("planned_files", []),
+            }
+        )
     work_path = root / "WORK.md"
     if not work_path.exists() or BEGIN not in work_path.read_text(encoding="utf-8") or END not in work_path.read_text(encoding="utf-8"):
         raise TrackerError("WORK.md with active-plan markers is required; run init")
@@ -684,7 +817,8 @@ def print_text_tree(data: list[dict[str, Any]]) -> None:
             suffix = ""
             if mark == "○" and task["waiting_on"]:
                 suffix = "\tneeds " + ",".join(task["waiting_on"])
-            print(f"  {mark} {task['task_id']}\t{task['status']}\t{task['title']}{suffix}")
+            batch = f" [batch {task['batch']}]" if task["batch"] else ""
+            print(f"  {mark} {task['task_id']}\t{task['status']}\t{task['title']}{batch}{suffix}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -725,7 +859,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(data, indent=2, ensure_ascii=False))
             else:
                 for row in data:
-                    print(f"{row['task_id']}\t{row['title']}\t{','.join(row['dependencies'])}\t{row['path']}")
+                    batch = f"\tbatch {row['batch']}" if row["batch"] else ""
+                    print(
+                        f"{row['task_id']}\t{row['title']}\t"
+                        f"{','.join(row['dependencies'])}\t{row['path']}{batch}"
+                    )
+                if args.dry_run:
+                    batches: dict[str, list[str]] = {}
+                    for row in data:
+                        if row["batch"]:
+                            batches.setdefault(row["batch"], []).append(row["task_id"])
+                    for batch, task_ids in sorted(batches.items()):
+                        print(f"batch {batch} (run together): {', '.join(task_ids)}")
         elif args.command == "comment":
             message = args.text if args.text is not None else Path(args.file).read_text(encoding="utf-8")
             append_comment(root, args.task_id, message, args.author)
