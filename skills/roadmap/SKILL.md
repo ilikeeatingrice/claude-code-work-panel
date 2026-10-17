@@ -53,7 +53,7 @@ Done when: the roadmap is registered, `validate` prints `OK` (or only errors tha
 ## Start or resume a task
 
 1. `RM tree --plan <plan_id>` and read the task file. Its dependencies are Done, or it is In Progress with no live session on it (the Work Panel checks that before it offers the task).
-2. **Read the task brief** (the task file's `brief:` field) and every file it marks **must read**, before planning any work. The brief is the plan; the task file holds its acceptance criteria and journal. A task without a brief: read `PLAN.md` and the design docs it names, and say in your claim comment that the task has no brief.
+2. **Read the task brief** (the task file's `brief:` field) and every file it marks **must read**, before planning any work. The brief is the plan; the task file holds its acceptance criteria and journal. A task without a brief: read `PLAN.md` and the design docs it names, and say in your claim comment that the task has no brief. When the brief was written before the tasks it depends on shipped, run its fresh-session check again against the shipped code before any work starts, and fix the brief from the answers: names, signatures and seams change while dependencies are built.
 3. **Claim it:** `RM status <id> --set "In Progress" --assignee @claude`, then `RM comment <id> --text "session start ..."` naming the branch, the intended scope, and the first verification command.
 4. If the task was already In Progress, read its latest journal record first and record the takeover in your claim comment.
 5. If the first message named a handoff note on another task, read that task's latest journal record before you start.
