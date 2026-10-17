@@ -461,3 +461,175 @@ def test_status_and_comment_preserve_crlf_prefix(tmp_path):
     prefix = changed.split(roadmap.COMMENTS_END.encode())[0]
     roadmap.append_comment(tmp_path, "WORK-001", "wait", "@me")
     assert path.read_bytes().startswith(prefix)
+
+
+def write_brief(root, relative, text="## Fresh-session check\n\nReady.\n"):
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_create_writes_key_brief_and_reference_and_rejects_missing_brief(tmp_path):
+    root = fresh_create_repo(tmp_path)
+    brief = "docs/programs/checkout-redesign/tasks/totals.md"
+    write_brief(root, brief)
+    spec = create_spec(
+        tmp_path,
+        tasks=[{"key": "totals", "title": "Cart totals", "brief": brief}],
+    )
+    roadmap.plan_create(root, spec, False)
+    task = {task["task_id"]: task for task in roadmap.load_tasks(root)}["WORK-001.01"]
+    written = Path(task["path"]).read_text(encoding="utf-8")
+    assert task["key"] == "totals"
+    assert task["brief"] == brief
+    assert 'key: "totals"\n' in written
+    assert f'brief: "{brief}"\n' in written
+    assert f"  - {brief}\n" in written
+
+    missing_root = tmp_path / "missing"
+    missing_root.mkdir()
+    fresh_create_repo(missing_root)
+    missing_spec = create_spec(
+        tmp_path / "missing",
+        tasks=[{"key": "totals", "title": "Cart totals", "brief": "docs/missing.md"}],
+    )
+    with pytest.raises(roadmap.TrackerError, match="brief.*does not exist"):
+        roadmap.plan_create(missing_root, missing_spec, True)
+
+
+def test_tree_json_includes_key_and_brief(tmp_path):
+    setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/a.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "a.md": task_text(
+                "WORK-001.01", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "queue"\nbrief: "docs/queue.md"\n',
+            ),
+        },
+    )
+    task = json.loads(run_cli(tmp_path, "tree", "--json").stdout)[0]["tasks"][0]
+    assert task["key"] == "queue"
+    assert task["brief"] == "docs/queue.md"
+
+
+def test_validate_old_plan_without_discussion_points_needs_no_briefs(tmp_path):
+    root = setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/PLAN.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "a.md": task_text("WORK-001.01", labels=["alpha"], parent="WORK-001"),
+        },
+    )
+    write_brief(root, "docs/PLAN.md", "# Plan\n")
+    assert roadmap.validation_errors(root) == []
+
+
+def test_validate_discussion_point_and_brief_errors(tmp_path):
+    root = setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/PLAN.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "queue.md": task_text(
+                "WORK-001.01", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "queue"\nbrief: "docs/queue.md"\n',
+            ),
+            "intake.md": task_text(
+                "WORK-001.02", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "intake"\nbrief: "docs/missing.md"\n',
+            ),
+            "nobrief.md": task_text(
+                "WORK-001.03", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "nobrief"\n',
+            ),
+            "done.md": task_text(
+                "WORK-001.04", status="Done", checked=True, labels=["alpha"],
+                parent="WORK-001", extra_frontmatter='key: "done"\n',
+            ),
+        },
+    )
+    write_brief(
+        root,
+        "docs/PLAN.md",
+        "# Plan\n\n## Discussion points\n"
+        "- P01 [kept → queue] Queue detail.\n"
+        "- P01 [changed -> queue] Duplicate.\n"
+        "- P02 [kept] Missing key.\n"
+        "- P03 [kept -> unknown] Unknown.\n"
+        "- P04 kept -> queue] Malformed.\n",
+    )
+    write_brief(root, "docs/queue.md", "P99\n/tmp/file\nscratchpad notes\n")
+    errors = roadmap.validation_errors(root)
+    expected = (
+        "brief missing: WORK-001.02 -> docs/missing.md",
+        "malformed discussion point: alpha: - P04 kept -> queue] Malformed.",
+        "duplicate discussion point: alpha: P01",
+        "discussion point P02 has no task key: alpha",
+        "point P03 names unknown task key: unknown",
+        "brief required: WORK-001.03",
+        "brief for WORK-001.01 does not cover P01",
+        "brief points at a temporary path: WORK-001.01: line 2",
+        "brief points at a temporary path: WORK-001.01: line 3",
+        "brief has no fresh-session check: WORK-001.01",
+    )
+    for error in expected:
+        assert errors.count(error) == 1
+    assert not any("brief required: WORK-001.04" in error for error in errors)
+
+
+def test_validate_fully_covered_discussion_points(tmp_path):
+    root = setup_repo(
+        tmp_path,
+        plans=[(1, "alpha", "docs/PLAN.md", "Active", "WORK-001")],
+        tasks={
+            "p.md": task_text("WORK-001", labels=["alpha"]),
+            "queue.md": task_text(
+                "WORK-001.01", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "queue"\nbrief: "docs/queue.md"\n',
+            ),
+            "intake.md": task_text(
+                "WORK-001.02", labels=["alpha"], parent="WORK-001",
+                extra_frontmatter='key: "intake"\nbrief: "docs/intake.md"\n',
+            ),
+        },
+    )
+    write_brief(
+        root,
+        "docs/PLAN.md",
+        "## Discussion points\n"
+        "- P01 [kept → queue] Queue.\n"
+        "- P02 [changed -> queue, intake] Retention.\n"
+        "- P03 [dropped] Later.\n"
+        "- P04 [open] Unanswered.\n\n## Next\n- P05 [kept] ignored\n",
+    )
+    write_brief(root, "docs/queue.md", "P01 and P02\n\n## Fresh-session check\nOK\n")
+    write_brief(root, "docs/intake.md", "P02\n\n## Fresh-session check\nOK\n")
+    assert roadmap.validation_errors(root) == []
+
+
+def test_brief_command_sets_replaces_preserves_body_and_rejects_missing(tmp_path):
+    original = task_text("WORK-001", extra_frontmatter="references:\n  - docs/PLAN.md\n")
+    setup_repo(tmp_path, tasks={"a.md": original})
+    write_brief(tmp_path, "docs/one.md")
+    write_brief(tmp_path, "docs/two.md")
+    path = tmp_path / "backlog" / "tasks" / "a.md"
+    body = original.split("---\n", 2)[2]
+
+    assert run_cli(tmp_path, "brief", "WORK-001", "--set", "docs/one.md", "--key", "queue").returncode == 0
+    first = path.read_text(encoding="utf-8")
+    assert 'brief: "docs/one.md"' in first and 'key: "queue"' in first
+    assert "  - docs/one.md" in first and first.endswith(body)
+
+    assert run_cli(tmp_path, "brief", "WORK-001", "--set", "docs/two.md").returncode == 0
+    second = path.read_text(encoding="utf-8")
+    assert 'brief: "docs/two.md"' in second and 'brief: "docs/one.md"' not in second
+    assert "  - docs/two.md" in second and second.endswith(body)
+
+    before = path.read_bytes()
+    result = run_cli(tmp_path, "brief", "WORK-001", "--set", "docs/missing.md")
+    assert result.returncode == 2 and "does not exist" in result.stderr
+    assert path.read_bytes() == before

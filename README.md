@@ -27,7 +27,7 @@ Python 3.10+ is needed for the tracker. No other dependencies.
 ## Use it
 
 1. **Design.** Discuss the feature with the agent as usual.
-2. **Create.** `/work create checkout-redesign`. The agent writes `docs/programs/checkout-redesign/PLAN.md`, then shows the preview: every task, and what each one waits on. Reply OK (or ask for changes).
+2. **Create.** `/work create checkout-redesign`. The agent collects every point of the discussion, writes `docs/programs/checkout-redesign/PLAN.md` and one brief per task, has a fresh agent check that each brief is enough on its own, then shows the preview: the points it dropped, changed or left open, every task, and what each one waits on. Reply OK (or ask for changes).
 3. **Open the panel.** `/work` shows it; it stays until you type `/work` again. New sessions start with it hidden. Arrow keys move, Enter opens a roadmap or picks a task.
 4. **Start.** Pick a `●` task. In a fresh session the button is **Start**; it sends the first message, and the agent claims the task.
 5. **Next task.** When a task is done, pick the next one and press **Clear and start** (twice, to confirm).
@@ -41,6 +41,17 @@ Python 3.10+ is needed for the tracker. No other dependencies.
 | `◐` | In progress | Only if no live session is on it |
 | `■` | Blocked: shows its resume condition | No |
 | `✓` | Done, folded into one `N done` line | No |
+
+### Task briefs
+
+A roadmap is made in one session and worked in many fresh ones, so the details of the discussion have to survive the move. The roadmap skill handles that the way plan mode does:
+
+- **Every point is listed.** `PLAN.md` gets a `## Discussion points` list: each proposal, number, decision, rejected option and open question, labelled kept, changed, dropped or open, with kept and changed naming the task that carries it.
+- **Every task gets a brief**, its own plan file at `docs/programs/<roadmap>/tasks/<key>.md`: context, decisions in the person's words, the approach, files and code to reuse, supporting material at lasting paths (handoff packages, design pages, the source session), the points it covers, open questions and how to verify. The format is in [skills/roadmap/references/brief.md](skills/roadmap/references/brief.md).
+- **A fresh agent checks each brief** before the preview: given only the brief, what would it still have to ask? The answers go into the brief.
+- **The start message names the brief**, and the session reads it before it plans any work.
+
+`validate` checks the coverage: every kept or changed point appears in its task's brief, no brief points into `/tmp` or a scratchpad, and every brief has its fresh-session check. Roadmaps without a points list are not checked; `RM brief <id> --set <path>` adds briefs to them.
 
 ### Batches
 
@@ -95,10 +106,11 @@ Everything lives in your repo as plain text:
 WORK.md                          the active roadmaps
 backlog.config.yml               task id prefix, folders
 backlog/tasks/task-001.02 - Coupon-codes.md
-docs/programs/<roadmap>/PLAN.md  the design
+docs/programs/<roadmap>/PLAN.md  the design and the discussion points
+docs/programs/<roadmap>/tasks/   one brief per task
 ```
 
-Tasks use the [Backlog.md](https://github.com/MrLesk/Backlog.md) file format: YAML front matter (status, labels, dependencies, parent), acceptance criteria, and a comments block that serves as the task's journal. See [tracker/README.md](tracker/README.md) for the format and commands (`plans`, `tree`, `ready`, `validate`, `init`, `create`, `comment`, `status`).
+Tasks use the [Backlog.md](https://github.com/MrLesk/Backlog.md) file format: YAML front matter (status, labels, dependencies, parent), acceptance criteria, and a comments block that serves as the task's journal. See [tracker/README.md](tracker/README.md) for the format and commands (`plans`, `tree`, `ready`, `validate`, `init`, `create`, `comment`, `status`, `brief`).
 
 ## Settings
 

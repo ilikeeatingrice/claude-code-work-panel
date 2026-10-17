@@ -23,6 +23,10 @@ export type TreeTask = {
   // to change. Missing means null / [].
   batch?: string | null
   planned_files?: string[]
+  // Optional: the task's plan file (a task brief) and its spec key. Older
+  // trackers omit both.
+  brief?: string | null
+  key?: string | null
 }
 
 export type TreePlan = {

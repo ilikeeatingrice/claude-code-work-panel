@@ -344,9 +344,18 @@ function noteLines(note: Note): string[] {
   ]
 }
 
+// A task brief is the task's own plan file; a fresh session reads it first.
+const briefLine = (tasks: TreeTask[]): string[] => {
+  const given = tasks.filter(task => task.brief)
+  if (!given.length) return []
+  const list = given.map(task => (tasks.length > 1 ? `${shortId(task.task_id)}: ${task.brief}` : task.brief)).join('; ')
+  return [`Read the task brief${given.length > 1 ? 's' : ''} and the files ${given.length > 1 ? 'they mark' : 'it marks'} must read before planning any work — ${list}`]
+}
+
 function firstMessage(plan: TreePlan, task: TreeTask, note?: Note): string {
   const lines = [
     `Start ${task.task_id} (${task.title}). Roadmap: ${plan.plan_id} (${plan.parent_task_id}).${startHint ? ` ${startHint}` : ''}`,
+    ...briefLine([task]),
   ]
   if (task.status === 'In Progress') lines.push(takeoverLine(task))
   if (note) lines.push(...noteLines(note))
@@ -366,6 +375,7 @@ function batchMessage(plan: TreePlan, name: string, members: TreeTask[], note?: 
   if (files.length) {
     lines.push(`Planned files — ${files.map(task => `${shortId(task.task_id)}: ${task.planned_files!.join(', ')}`).join('; ')}`)
   }
+  lines.push(...briefLine(members))
   if (note) lines.push(...noteLines(note))
   return lines.join('\n')
 }

@@ -42,6 +42,36 @@ leading `./`; a directory also overlaps every path beneath it.
 In a `create --spec` task, use `"batch": "A"` and `"files": ["path", ...]`.
 Dry runs validate batch dependencies and file overlaps before anything is written.
 
+### Task briefs and discussion points
+
+A task created from a spec may include a stable task key and a Markdown brief under
+the project root:
+
+```json
+{"key": "queue", "title": "Queue jobs", "brief": "docs/programs/jobs/tasks/queue.md"}
+```
+
+`create` writes `key` and `brief` to the task frontmatter and adds the brief after
+the plan in `references`. The brief must already exist, and must contain a
+`## Fresh-session check` heading. Existing tasks can be backfilled with `brief`;
+`--key` is optional when the task already has a key.
+
+An Active plan can preserve the decisions from its source discussion in PLAN.md:
+
+```md
+## Discussion points
+- P01 [kept → queue] Two runners on today's box; one running job per account.
+- P02 [changed -> queue, intake] Keep files 90 days (first proposal was 30).
+- P03 [dropped] Link import — phase 3.
+- P04 [open] Free checks were proposed but never resolved.
+```
+
+The section ends at the next `##` heading. `validate` checks its syntax, unique
+point IDs, named task keys, required briefs for non-Done descendants, and coverage:
+each kept or changed point ID must occur as a whole-word token in every named
+task's brief. It also rejects brief lines containing `/tmp/` or `scratchpad`.
+Plans without a Discussion points section retain the older validation behavior.
+
 ## Commands
 
 ```text
@@ -53,6 +83,7 @@ python3 tracker/roadmap.py init [--prefix task]
 python3 tracker/roadmap.py create --spec spec.json [--dry-run] [--json]
 python3 tracker/roadmap.py comment TASK_ID (--text TEXT | --file FILE) [--author @claude]
 python3 tracker/roadmap.py status TASK_ID --set STATUS [--assignee @name]
+python3 tracker/roadmap.py brief TASK_ID --set PATH [--key KEY]
 ```
 
 `create --dry-run --json` previews IDs, dependency mapping, batch, planned files,

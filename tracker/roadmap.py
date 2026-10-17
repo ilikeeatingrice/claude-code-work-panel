@@ -33,14 +33,17 @@ CREATE_SPEC_HELP = """spec shape:
       {"key": "totals", "title": "Cart totals in one place",
        "description": "...", "acceptance": ["observable criterion", "..."],
        "depends_on": [], "priority": "p1", "batch": "A",
-       "files": ["src/cart/totals.py", "tests/cart/"]},
+       "files": ["src/cart/totals.py", "tests/cart/"],
+       "brief": "docs/programs/checkout-redesign/tasks/totals.md"},
       {"key": "coupons", "title": "Coupon codes",
        "acceptance": ["..."], "depends_on": ["totals"]}
     ]
   }
 depends_on names spec keys or existing task ids. --dry-run writes nothing and
 prints the ids, titles, dependencies and paths it would create. A batch groups
-tasks safe to run together: no dependencies, overlapping files, or shared test resources."""
+tasks safe to run together: no dependencies, overlapping files, or shared test resources.
+Discussion points in PLAN.md use: - P01 [kept → task-key] Text.
+Labels are kept, changed, dropped, or open; kept/changed points name task keys."""
 BEGIN = "<!-- ACTIVE_PLANS:BEGIN -->"
 END = "<!-- ACTIVE_PLANS:END -->"
 COMMENTS_END = "<!-- COMMENTS:END -->"
@@ -226,6 +229,8 @@ def load_tasks(root: Path) -> list[dict[str, Any]]:
                         if isinstance(meta.get("planned_files", []), list)
                         else []
                     ),
+                    "key": meta.get("key") if isinstance(meta.get("key"), str) else None,
+                    "brief": meta.get("brief") if isinstance(meta.get("brief"), str) else None,
                     "resume_condition": resume if str(meta.get("status") or "") == "Blocked" else None,
                     "last_comment_at": last_comment_at,
                     "completed": completed,
@@ -272,7 +277,8 @@ def public_task(task: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "task_id", "title", "status", "priority", "ordinal", "assignees", "labels",
         "parent_task_id", "dependencies", "ready", "waiting_on", "open_children",
-        "batch", "planned_files", "resume_condition", "last_comment_at", "completed", "path",
+        "batch", "planned_files", "key", "brief", "resume_condition", "last_comment_at",
+        "completed", "path",
     )
     return {key: task[key] for key in keys}
 
@@ -384,6 +390,48 @@ def batch_conflict_errors(
     return errors
 
 
+DISCUSSION_POINT_RE = re.compile(
+    r"^-\s+(P\d+)\s+\[(kept|changed|dropped|open)"
+    r"(?:\s*(?:→|->)\s*([A-Za-z0-9_-]+(?:\s*,\s*[A-Za-z0-9_-]+)*))?\]\s+(.+)$"
+)
+
+
+def discussion_points(text: str) -> tuple[list[tuple[str, str, list[str]]], list[str]] | None:
+    heading = re.search(r"(?m)^## Discussion points\s*$", text)
+    if heading is None:
+        return None
+    section = text[heading.end():]
+    following = re.search(r"(?m)^##\s+", section)
+    if following:
+        section = section[:following.start()]
+    points: list[tuple[str, str, list[str]]] = []
+    malformed: list[str] = []
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- P"):
+            continue
+        match = DISCUSSION_POINT_RE.fullmatch(line)
+        if match is None:
+            malformed.append(line)
+            continue
+        keys = [key.strip() for key in (match.group(3) or "").split(",") if key.strip()]
+        points.append((match.group(1), match.group(2), keys))
+    return points, malformed
+
+
+def _brief_path(root: Path, value: str) -> Path | None:
+    path = Path(value)
+    if path.is_absolute():
+        return None
+    root_resolved = root.resolve()
+    resolved = (root / path).resolve()
+    try:
+        resolved.relative_to(root_resolved)
+    except ValueError:
+        return None
+    return resolved
+
+
 def validation_errors(root: Path) -> list[str]:
     plans = registry(root)
     tasks = load_tasks(root)
@@ -398,6 +446,10 @@ def validation_errors(root: Path) -> list[str]:
             errors.append(f"registry parent missing: {plan['plan_id']} -> {plan['parent_task_id']}")
     for task in tasks:
         task_id = task["task_id"]
+        if task["brief"]:
+            brief_path = _brief_path(root, task["brief"])
+            if brief_path is None or not brief_path.is_file():
+                errors.append(f"brief missing: {task_id} -> {task['brief']}")
         raw_batch = task["_batch_value"]
         if task["_batch_present"] and (
             not isinstance(raw_batch, str) or not BATCH_RE.fullmatch(raw_batch)
@@ -472,6 +524,61 @@ def validation_errors(root: Path) -> list[str]:
         for task in descendants:
             if plan["plan_id"] not in task["labels"]:
                 errors.append(f"active plan label missing: {task['task_id']} needs {plan['plan_id']}")
+        plan_path = _brief_path(root, plan["path"])
+        if plan_path is None or not plan_path.is_file():
+            continue
+        parsed = discussion_points(plan_path.read_text(encoding="utf-8"))
+        if parsed is None:
+            continue
+        points, malformed = parsed
+        errors.extend(
+            f"malformed discussion point: {plan['plan_id']}: {line}" for line in malformed
+        )
+        seen_points: set[str] = set()
+        for point_id, label, keys in points:
+            if point_id in seen_points:
+                errors.append(f"duplicate discussion point: {plan['plan_id']}: {point_id}")
+            seen_points.add(point_id)
+            if label in ("kept", "changed") and not keys:
+                errors.append(
+                    f"discussion point {point_id} has no task key: {plan['plan_id']}"
+                )
+        by_key = {task["key"]: task for task in descendants if task["key"] is not None}
+        for point_id, _, keys in points:
+            for key in keys:
+                if key not in by_key:
+                    errors.append(f"point {point_id} names unknown task key: {key}")
+        current = [task for task in descendants if not is_done(task)]
+        for task in current:
+            if not task["brief"]:
+                errors.append(f"brief required: {task['task_id']}")
+                continue
+            brief_path = _brief_path(root, task["brief"])
+            if brief_path is None or not brief_path.is_file():
+                continue
+            brief_text = brief_path.read_text(encoding="utf-8")
+            for line_number, line in enumerate(brief_text.splitlines(), 1):
+                if "/tmp/" in line or "scratchpad" in line:
+                    errors.append(
+                        f"brief points at a temporary path: {task['task_id']}: line {line_number}"
+                    )
+            if not re.search(r"(?m)^## Fresh-session check\s*$", brief_text):
+                errors.append(f"brief has no fresh-session check: {task['task_id']}")
+        coverage_checked: set[tuple[str, str]] = set()
+        for point_id, label, keys in points:
+            if label not in ("kept", "changed"):
+                continue
+            for key in keys:
+                task = by_key.get(key)
+                if task is None or is_done(task) or (task["task_id"], point_id) in coverage_checked:
+                    continue
+                coverage_checked.add((task["task_id"], point_id))
+                brief_path = _brief_path(root, task["brief"]) if task["brief"] else None
+                if brief_path is None or not brief_path.is_file():
+                    continue
+                brief_text = brief_path.read_text(encoding="utf-8")
+                if not re.search(rf"(?<!\w){re.escape(point_id)}(?!\w)", brief_text):
+                    errors.append(f"brief for {task['task_id']} does not cover {point_id}")
     return errors
 
 
@@ -490,7 +597,14 @@ def render_task(task: dict[str, Any], width: int, created: str, plan_id: str, pl
     lines.extend(f"  - {dep}" for dep in deps)
     if not deps:
         lines[-1] = "dependencies: []"
-    lines.extend(["references:", f"  - {plan_path}", "modified_files: []"])
+    if task.get("key") is not None:
+        lines.append(f"key: {json.dumps(task['key'], ensure_ascii=False)}")
+    if task.get("brief") is not None:
+        lines.append(f"brief: {json.dumps(task['brief'], ensure_ascii=False)}")
+    lines.extend(["references:", f"  - {plan_path}"])
+    if task.get("brief") is not None:
+        lines.append(f"  - {task['brief']}")
+    lines.append("modified_files: []")
     if parent:
         lines.append(f"parent_task_id: {parent}")
     if priority:
@@ -586,6 +700,13 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
             or any(not isinstance(path, str) or not path for path in files)
         ):
             raise TrackerError(f"files must be a list of non-empty strings: {item['key']}")
+        brief = item.get("brief")
+        if brief is not None:
+            if not isinstance(brief, str) or not brief:
+                raise TrackerError(f"brief must be a non-empty relative path: {item['key']}")
+            brief_path = _brief_path(root, brief)
+            if brief_path is None or not brief_path.is_file():
+                raise TrackerError(f"brief does not exist under root: {brief}")
         graph[item["key"]] = [dep for dep in raw_deps if dep in key_ids]
         prepared_children.append(
             {
@@ -594,6 +715,7 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
                 "priority": str(item.get("priority") or spec.get("priority") or "p1").lower(),
                 "ordinal": 1000 * index, "parent": base_id,
                 "batch": batch, "planned_files": files, "files_given": "files" in item,
+                "key": item["key"], "brief": brief,
             }
         )
     visiting: set[str] = set()
@@ -734,6 +856,64 @@ def set_status(root: Path, task_id: str, status: str, assignee: str | None) -> N
     path.write_bytes("".join(lines).encode("utf-8"))
 
 
+def set_brief(root: Path, task_id: str, brief: str, key: str | None) -> None:
+    brief_path = _brief_path(root, brief)
+    if brief_path is None or not brief_path.is_file():
+        raise TrackerError(f"brief does not exist under root: {brief}")
+    task = find_task(root, task_id)
+    path = Path(task["path"])
+    text = path.read_bytes().decode("utf-8")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        raise TrackerError(f"frontmatter missing: {task_id}")
+    newline = "\r\n" if any(line.endswith("\r\n") for line in lines) else "\n"
+
+    def frontmatter_end() -> int:
+        end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+        if end is None:
+            raise TrackerError(f"frontmatter unterminated: {task_id}")
+        return end
+
+    def set_scalar(name: str, value: str) -> None:
+        end = frontmatter_end()
+        index = next((i for i in range(1, end) if re.match(rf"^{name}:\s*", lines[i])), None)
+        replacement = f"{name}: {json.dumps(value, ensure_ascii=False)}{newline}"
+        if index is None:
+            lines.insert(end, replacement)
+        else:
+            lines[index] = replacement
+
+    set_scalar("brief", brief)
+    if key is not None:
+        set_scalar("key", key)
+    end = frontmatter_end()
+    references_index = next(
+        (i for i in range(1, end) if re.match(r"^references:\s*", lines[i])), None
+    )
+    if references_index is None:
+        lines[end:end] = ["references:" + newline, f"  - {brief}{newline}"]
+    else:
+        tail = lines[references_index].split(":", 1)[1].strip()
+        block_end = references_index + 1
+        while block_end < end and re.match(r"^\s+-\s+", lines[block_end]):
+            block_end += 1
+        if tail:
+            references = as_list(_scalar(tail))
+            if brief not in references:
+                references.append(brief)
+                lines[references_index] = (
+                    "references: " + json.dumps(references, ensure_ascii=False) + newline
+                )
+        else:
+            references = [
+                str(_scalar(re.sub(r"^\s+-\s+", "", line).strip()))
+                for line in lines[references_index + 1:block_end]
+            ]
+            if brief not in references:
+                lines.insert(block_end, f"  - {brief}{newline}")
+    path.write_bytes("".join(lines).encode("utf-8"))
+
+
 def initialize(root: Path, prefix: str) -> None:
     work = root / "WORK.md"
     if not work.exists():
@@ -796,6 +976,10 @@ def parser() -> argparse.ArgumentParser:
     status.add_argument("task_id")
     status.add_argument("--set", required=True, dest="new_status")
     status.add_argument("--assignee")
+    brief = commands.add_parser("brief")
+    brief.add_argument("task_id")
+    brief.add_argument("--set", required=True, dest="brief_path")
+    brief.add_argument("--key")
     return result
 
 
@@ -876,6 +1060,8 @@ def main(argv: list[str] | None = None) -> int:
             append_comment(root, args.task_id, message, args.author)
         elif args.command == "status":
             set_status(root, args.task_id, args.new_status, args.assignee)
+        elif args.command == "brief":
+            set_brief(root, args.task_id, args.brief_path, args.key)
         return 0
     except (TrackerError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
