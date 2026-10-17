@@ -633,3 +633,20 @@ def test_brief_command_sets_replaces_preserves_body_and_rejects_missing(tmp_path
     result = run_cli(tmp_path, "brief", "WORK-001", "--set", "docs/missing.md")
     assert result.returncode == 2 and "does not exist" in result.stderr
     assert path.read_bytes() == before
+
+
+def test_create_writes_through_a_symlinked_work_md(tmp_path):
+    (tmp_path / "repo").mkdir()
+    root = fresh_create_repo(tmp_path / "repo")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    real = shared / "WORK.md"
+    (root / "WORK.md").replace(real)
+    (root / "WORK.md").symlink_to(real)
+    spec = create_spec(tmp_path / "repo")
+
+    roadmap.plan_create(root, spec, False)
+
+    assert (root / "WORK.md").is_symlink()
+    assert "| 1 | [checkout-redesign]" in real.read_text(encoding="utf-8")
+    assert list(root.glob(".roadmap-work-*")) == [] and list(shared.glob(".roadmap-work-*")) == []

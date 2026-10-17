@@ -787,10 +787,13 @@ def plan_create(root: Path, spec_path: Path, dry_run: bool) -> list[dict[str, An
         priority = max((plan["priority"] for plan in plans), default=0) + 1
         row = f"| {priority} | [{plan_id}]({plan_path}) | Active | {base_id} |\n"
         work = work.replace(END, row + END, 1)
-        handle, work_temp_name = tempfile.mkstemp(prefix=".roadmap-work-", dir=root, text=True)
+        # WORK.md may be a link to a tracker shared by several checkouts: replace
+        # the file it points to, never the link itself.
+        work_target = work_path.resolve()
+        handle, work_temp_name = tempfile.mkstemp(prefix=".roadmap-work-", dir=work_target.parent, text=True)
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
             stream.write(work)
-        os.replace(work_temp_name, work_path)
+        os.replace(work_temp_name, work_target)
     except Exception:
         for temporary, destination in staged:
             temporary.unlink(missing_ok=True)
