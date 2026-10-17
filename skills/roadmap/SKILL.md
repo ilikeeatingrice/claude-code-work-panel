@@ -22,10 +22,10 @@ The discussion is the source. Every later file is written from it directly, neve
 3. **Write the plan.** Create `docs/programs/<plan_id>/PLAN.md` (or the location the project protocol names): the goal, the design decisions and why, what is out of scope, the slices in order, how each is verified, a `Sources` line (session ids with time ranges, and the lasting path of every supporting file), and the points under `## Discussion points`, each labelled:
 
    ```
-   - P07 [kept → own-video] Customer also ticks 「我拥有这个视频或有权使用」 for the video itself.
-   - P08 [changed → queue, intake] Keep files 90 days (first proposal: 30).
-   - P09 [dropped] Link import: phase 3 (owner, 10-17).
-   - P10 [open] Free checks only for accounts with points for one swap (proposed, never answered).
+   - P07 [kept → checkout] Customer also ticks "I accept the terms" before paying.
+   - P08 [changed → upload, cleanup] Keep files 90 days (first proposal: 30).
+   - P09 [dropped] Import from a link: phase 3 (owner, 10-17).
+   - P10 [open] Free trial only for accounts with a saved card (proposed, never answered).
    ```
 
    `kept` and `changed` name the slice key(s) whose brief carries the point.

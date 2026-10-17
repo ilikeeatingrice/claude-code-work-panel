@@ -32,13 +32,13 @@ and patterns to reuse, each with its path.
 Every document, design page, handoff package, screenshot or earlier session that holds more
 detail, each at a lasting path, with what to read in it and why. Mark the ones the session
 must read before starting with **must read**.
-- **must read** `docs/dev/media-intake-design.md` rules 1 and 3.
-- `~/Documents/Vault/lark-im-resources/<handoff>.zip` → `replicate.html`: leo's page design.
+- **must read** `docs/dev/upload-design.md` rules 1 and 3.
+- `docs/handoff/<handoff>.zip` → `page.html`: the designer's page mockup.
 - Source discussion: session `<session id>`, `<start>`–`<end>` UTC.
 
 ## Discussion points covered
 The ids from PLAN.md's `## Discussion points` that this brief carries, each restated in a
-line, so the reader does not need PLAN.md open: `P07 — the video rights tick 「…」 (open).`
+line, so the reader does not need PLAN.md open: `P07 — the terms tick before paying (kept).`
 
 ## Open questions
 What is still undecided, and who decides. "None" when there are none.
