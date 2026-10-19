@@ -650,3 +650,20 @@ def test_create_writes_through_a_symlinked_work_md(tmp_path):
     assert (root / "WORK.md").is_symlink()
     assert "| 1 | [checkout-redesign]" in real.read_text(encoding="utf-8")
     assert list(root.glob(".roadmap-work-*")) == [] and list(shared.glob(".roadmap-work-*")) == []
+
+
+def test_brief_path_follows_a_linked_roadmap_folder_but_not_an_escape(tmp_path):
+    root = tmp_path / "repo"
+    (root / "docs" / "programs").mkdir(parents=True)
+    shared = tmp_path / "tracker" / "programs" / "checkout"
+    (shared / "tasks").mkdir(parents=True)
+    (shared / "tasks" / "totals.md").write_text("brief", encoding="utf-8")
+    (root / "docs" / "programs" / "checkout").symlink_to(shared)
+    (tmp_path / "outside.md").write_text("x", encoding="utf-8")
+
+    linked = roadmap._brief_path(root, "docs/programs/checkout/tasks/totals.md")
+    assert linked is not None and linked.is_file()
+    assert linked == root.resolve() / "docs/programs/checkout/tasks/totals.md"
+    assert roadmap._brief_path(root, "../outside.md") is None
+    assert roadmap._brief_path(root, "docs/../../outside.md") is None
+    assert roadmap._brief_path(root, str(tmp_path / "outside.md")) is None

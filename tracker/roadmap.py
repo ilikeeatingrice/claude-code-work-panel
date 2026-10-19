@@ -420,16 +420,21 @@ def discussion_points(text: str) -> tuple[list[tuple[str, str, list[str]]], list
 
 
 def _brief_path(root: Path, value: str) -> Path | None:
+    """Return the repo path a plan or brief value names, or None if it leaves the repo.
+
+    The check is on the written path, not on where symlinks point: like WORK.md and
+    backlog/, a roadmap folder may be a link into a tracker shared by several checkouts.
+    """
     path = Path(value)
     if path.is_absolute():
         return None
-    root_resolved = root.resolve()
-    resolved = (root / path).resolve()
+    root_abs = Path(os.path.normpath(root.resolve()))
+    candidate = Path(os.path.normpath(root_abs / path))
     try:
-        resolved.relative_to(root_resolved)
+        candidate.relative_to(root_abs)
     except ValueError:
         return None
-    return resolved
+    return candidate
 
 
 def validation_errors(root: Path) -> list[str]:
